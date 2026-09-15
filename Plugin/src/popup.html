@@ -45,9 +45,12 @@
             <span id="appText">检测中…</span>
           </span>
         </div>
-        <div class="row">
+        <div class="row" title="端口会自动跟随桌面应用，无需两边各填一次">
           <span class="row__label">本地代理地址</span>
-          <span id="endpoint" class="row__value row__value--mono">127.0.0.1:7890</span>
+          <span class="row__value">
+            <span id="endpoint" class="row__value--mono">127.0.0.1:7890</span>
+            <span id="portSource" class="tag" hidden></span>
+          </span>
         </div>
         <div class="row">
           <span class="row__label">代理状态</span>

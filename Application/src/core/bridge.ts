@@ -450,12 +450,16 @@ export class ProxyBridge extends EventEmitter {
       return;
     }
 
-    // 健康检查：供浏览器插件判断应用是否在线
+    // 健康检查：供浏览器插件判断应用是否在线，并自动跟随真实端口
     if (head.target === HEALTH_PATH || head.target.startsWith(HEALTH_PATH + '?')) {
+      const address = this.server?.address();
+      const actualPort = typeof address === 'object' && address !== null ? address.port : null;
       const body = JSON.stringify({
         app: 'proxy-bridge',
         ok: true,
         version: this.options.appVersion ?? '0.0.0',
+        // 单独给出端口数字：插件不必去解析 listen 字符串，避免 IPv6 场景下解析出错
+        port: actualPort,
         listen: this.listenAddress,
       });
       client.end(

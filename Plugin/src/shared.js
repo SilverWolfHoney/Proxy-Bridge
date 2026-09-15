@@ -24,7 +24,17 @@ export const DEFAULT_CONFIG = Object.freeze({
   enabled: false,
   port: 7890,
   bypassList: Object.freeze(['localhost', '127.0.0.1']),
+  /** 端口是否由「自动发现」写入（用户手动改端口后会被置回 false） */
+  portAutoFilled: false,
 });
+
+/**
+ * 自动发现端口时的候选列表。
+ *
+ * 桌面应用里改端口后，插件靠它自动跟上，用户不必在两处各填一遍。
+ * 顺序有意义：越靠前越可能是用户正在用的端口。
+ */
+export const CANDIDATE_PORTS = Object.freeze([7890, 7891, 7892, 7893, 8080, 8888, 1080, 10808, 20171, 7897]);
 
 /** chrome.storage 中使用的键名。 */
 export const STORAGE_KEYS = Object.freeze({
@@ -38,6 +48,8 @@ export const STORAGE_KEYS = Object.freeze({
 export const DEFAULT_STATE = Object.freeze({
   appOnline: false,
   appVersion: '',
+  /** 桌面应用实际在监听的端口（自动发现的结果） */
+  appPort: 0,
   lastCheckedAt: 0,
   probeError: '',
   proxyApplied: false,
@@ -116,7 +128,7 @@ export function normalizeBypassList(value) {
 /**
  * 把任意输入补齐成一份完整可用的配置对象。
  * @param {unknown} raw 原始配置
- * @returns {{enabled: boolean, port: number, bypassList: string[]}} 规范化配置
+ * @returns {{enabled: boolean, port: number, bypassList: string[], portAutoFilled: boolean}} 规范化配置
  */
 export function normalizeConfig(raw) {
   const source = raw && typeof raw === 'object' ? raw : {};
@@ -131,6 +143,7 @@ export function normalizeConfig(raw) {
     enabled: source.enabled === true,
     port: normalizePort(source.port, DEFAULT_CONFIG.port),
     bypassList,
+    portAutoFilled: source.portAutoFilled === true,
   };
 }
 
@@ -172,10 +185,10 @@ export function describeProbeError(error) {
  * 探测桌面应用是否在运行。
  *
  * 使用 AbortController 设置 1.5 秒超时，避免 Service Worker 被卡住。
- * 任何异常都被吞掉并转成 {@link ProbeResult}，调用方无需再 try/catch。
+ * 任何异常都被吞掉并转成普通对象，调用方无需再 try/catch。
  *
  * @param {number} port 本地端口
- * @returns {Promise<{online: boolean, version: string, error: string, checkedAt: number}>} 探测结果
+ * @returns {Promise<{online: boolean, port: number, version: string, error: string, checkedAt: number}>} 探测结果
  */
 export async function probeDesktopApp(port) {
   const checkedAt = Date.now();
@@ -193,6 +206,7 @@ export async function probeDesktopApp(port) {
     if (!response.ok) {
       return {
         online: false,
+        port: 0,
         version: '',
         error: `健康检查返回 HTTP ${response.status}`,
         checkedAt,
@@ -203,6 +217,7 @@ export async function probeDesktopApp(port) {
     if (!payload || payload.app !== HEALTH_APP_ID || payload.ok !== true) {
       return {
         online: false,
+        port: 0,
         version: '',
         error: '端口已被占用，但响应不是本插件配套的桌面应用',
         checkedAt,
@@ -211,6 +226,7 @@ export async function probeDesktopApp(port) {
 
     return {
       online: true,
+      port: normalizePort(port),
       version: String(payload.version ?? ''),
       error: '',
       checkedAt,
@@ -218,6 +234,7 @@ export async function probeDesktopApp(port) {
   } catch (error) {
     return {
       online: false,
+      port: 0,
       version: '',
       error: describeProbeError(error),
       checkedAt,
@@ -225,6 +242,53 @@ export async function probeDesktopApp(port) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * 自动发现桌面应用：先试配置里的端口，再依次试候选端口。
+ *
+ * 这样桌面应用里改了监听端口后，插件能自己跟上，不需要用户在两处各填一遍。
+ * 同一台机器上的连接被拒绝是立即返回的，所以扫一遍候选端口几乎不花时间。
+ *
+ * @param {number} preferredPort 用户配置的端口，优先尝试
+ * @returns {Promise<{online: boolean, port: number, version: string, error: string, checkedAt: number}>} 探测结果
+ */
+export async function discoverDesktopApp(preferredPort) {
+  const tried = new Set();
+  let firstError = '';
+
+  /** 依次尝试这些端口，返回第一个命中的结果 */
+  const tryPorts = async (ports) => {
+    for (const candidate of ports) {
+      const port = normalizePort(candidate, 0);
+      if (!port || tried.has(port)) continue;
+      tried.add(port);
+
+      const result = await probeDesktopApp(port);
+      if (result.online) {
+        // 应用会在响应里报出自己真实的监听端口：若与刚试的端口不一致，
+        // 以它为准再确认一次，避免配置被写成一个其实不通的端口
+        if (result.port && result.port !== port) {
+          const confirmed = await probeDesktopApp(result.port);
+          if (confirmed.online) return confirmed;
+        }
+        return result;
+      }
+      if (!firstError && result.error) firstError = result.error;
+    }
+    return null;
+  };
+
+  const hit = await tryPorts([preferredPort, ...CANDIDATE_PORTS]);
+  if (hit) return hit;
+
+  return {
+    online: false,
+    port: 0,
+    version: '',
+    error: firstError || `本机 ${LOCAL_PROXY_HOST} 上没找到运行中的桌面应用`,
+    checkedAt: Date.now(),
+  };
 }
 
 /**

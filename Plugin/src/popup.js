@@ -23,6 +23,7 @@ const el = {
   appLight: document.getElementById('appLight'),
   appText: document.getElementById('appText'),
   endpoint: document.getElementById('endpoint'),
+  portSource: document.getElementById('portSource'),
   proxyState: document.getElementById('proxyState'),
   checkedAt: document.getElementById('checkedAt'),
   notice: document.getElementById('notice'),
@@ -100,6 +101,23 @@ function render() {
   el.endpoint.textContent = enabled ? endpoint : `${endpoint}（未启用）`;
   el.proxyState.textContent = state.proxyApplied ? `已启用 → ${endpoint}` : enabled ? '已降级为直连' : '未启用';
   el.checkedAt.textContent = formatTime(state.lastCheckedAt);
+
+  // 端口来源：让用户知道这个端口是自动跟随桌面应用得到的，还是自己在设置页填的
+  const autoFilled = config.portAutoFilled === true;
+  if (autoFilled && online) {
+    el.portSource.hidden = false;
+    el.portSource.textContent = '已自动跟随应用';
+    el.portSource.className = 'tag tag--auto';
+    el.portSource.title = '端口由插件自动探测得到，你在桌面应用里改了端口，这里会自动跟上';
+  } else if (autoFilled && !online) {
+    el.portSource.hidden = false;
+    el.portSource.textContent = '待确认';
+    el.portSource.className = 'tag tag--pending';
+    el.portSource.title = '上次自动探测到的端口，当前连接不上桌面应用';
+  } else {
+    el.portSource.hidden = true;
+    el.portSource.textContent = '';
+  }
 
   // 提示条：错误优先，其次是降级提醒
   if (state.lastError) {

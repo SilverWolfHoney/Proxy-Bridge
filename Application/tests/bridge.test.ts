@@ -165,7 +165,7 @@ function openTunnelAndCollect(
   });
 }
 
-test('健康检查端点可供浏览器插件探测', async () => {
+test('健康检查端点可供浏览器插件探测，并报出真实端口', async () => {
   const harness = await startBridge({
     protocol: 'http',
     host: '127.0.0.1',
@@ -191,6 +191,18 @@ test('健康检查端点可供浏览器插件探测', async () => {
     assert.match(response, /^HTTP\/1\.1 200 OK/);
     assert.match(response, /"app":"proxy-bridge"/);
     assert.match(response, /Access-Control-Allow-Origin: \*/);
+
+    // 插件靠这些字段判断「这是配套的桌面应用」并自动跟随端口
+    const body = JSON.parse(response.slice(response.indexOf('\r\n\r\n') + 4)) as {
+      app: string;
+      ok: boolean;
+      port: number;
+      listen: string;
+    };
+    assert.equal(body.app, 'proxy-bridge');
+    assert.equal(body.ok, true);
+    assert.equal(body.port, harness.port, 'port 必须是真实监听的端口，插件用它自动跟随');
+    assert.equal(body.listen, `127.0.0.1:${harness.port}`);
   } finally {
     await harness.close();
   }

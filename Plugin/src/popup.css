@@ -245,6 +245,30 @@ body {
   font-weight: 400;
 }
 
+/* 小标记：标明端口来源（自动跟随 / 待确认） */
+.tag {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.6;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.tag--auto {
+  background: rgba(34, 197, 94, 0.14);
+  color: var(--ok);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.tag--pending {
+  background: rgba(245, 158, 11, 0.14);
+  color: var(--warn);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
 /* 状态指示灯 */
 .light {
   width: 8px;

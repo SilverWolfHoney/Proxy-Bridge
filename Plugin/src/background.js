@@ -20,8 +20,8 @@ import {
   HEALTH_INTERVAL_MS,
   LOCAL_PROXY_HOST,
   STORAGE_KEYS,
+  discoverDesktopApp,
   ensureConfig,
-  probeDesktopApp,
   readConfig,
   readState,
   writeConfig,
@@ -145,17 +145,28 @@ async function updateBadge(config, state) {
  * @returns {Promise<{config: object, state: object}>} 同步后的配置与状态
  */
 async function syncProxy({ probe = true, reason = 'sync' } = {}) {
-  const config = await readConfig();
+  let config = await readConfig();
   const previous = await readState();
 
-  let { appOnline, appVersion, lastCheckedAt, probeError } = previous;
+  let { appOnline, appVersion, appPort, lastCheckedAt, probeError } = previous;
+
+  let portChanged = false;
 
   if (probe) {
-    const health = await probeDesktopApp(config.port);
+    // 自动发现：先试配置的端口，再试候选端口，这样应用里改了端口插件能自己跟上
+    const health = await discoverDesktopApp(config.port);
     appOnline = health.online;
     appVersion = health.version;
+    appPort = health.port;
     lastCheckedAt = health.checkedAt;
     probeError = health.error;
+
+    if (health.online && health.port && health.port !== config.port) {
+      // 端口变了：写回配置。storage.onChanged 会再触发一次同步，但那时端口已经一致，
+      // 不会形成循环（最多多跑一轮探测）。
+      config = await writeConfig({ port: health.port, portAutoFilled: true });
+      portChanged = true;
+    }
   }
 
   const useProxy = shouldProxy(config, { appOnline });
@@ -167,16 +178,21 @@ async function syncProxy({ probe = true, reason = 'sync' } = {}) {
   const state = await writeState({
     appOnline,
     appVersion,
+    appPort,
     lastCheckedAt,
     probeError,
     proxyApplied: applied.proxyApplied,
     degraded,
     lastError: applied.lastError,
-    lastReason: reason,
+    lastReason: portChanged ? `${reason}:port-changed` : reason,
   });
 
+  if (portChanged) {
+    console.info(`[本地代理网关] 已自动跟随桌面应用端口：${config.port}`);
+  }
+
   await updateBadge(config, state);
-  return { config, state };
+  return { config, state, portChanged };
 }
 
 /**
@@ -249,9 +265,11 @@ async function handleMessage(message) {
 
     case 'saveConfig': {
       // 端口与绕过列表由设置页校验后提交，这里再规范化一次并立即重新应用。
+      // portAutoFilled 置回 false：这是用户手动指定的端口，优先于自动发现。
       await writeConfig({
         port: message.port,
         bypassList: message.bypassList,
+        portAutoFilled: false,
       });
       const synced = await queueSync({ probe: true, reason: 'message:saveConfig' });
       return { ok: true, config: synced.config, state: synced.state };
