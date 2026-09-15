@@ -42,10 +42,16 @@ export interface RulesConfig {
   proxy: string[];
 }
 
-/** 系统代理（Windows 注册表）配置 */
-export interface SystemProxyConfig {
+/**
+ * 全局代理配置。
+ *
+ * 开启后应用会把本机网关的地址写进 Windows 系统代理设置，
+ * 于是整台电脑上所有读取系统代理的程序都会经由这里转发。
+ */
+export interface GlobalProxyConfig {
+  /** 用户是否希望启用全局代理；应用启动时据此自动恢复 */
   enabled: boolean;
-  /** 是否同时接管 HTTPS，通常保持 true */
+  /** 是否同时接管 HTTPS（系统代理只认一个地址，此项保留用于将来区分协议） */
   alsoHttps: boolean;
 }
 
@@ -54,7 +60,7 @@ export interface AppConfig {
   upstream: UpstreamConfig;
   bridge: BridgeConfig;
   rules: RulesConfig;
-  systemProxy: SystemProxyConfig;
+  globalProxy: GlobalProxyConfig;
 }
 
 /** 脱敏后的配置：渲染层只能看到这个 */
@@ -111,6 +117,25 @@ export interface BridgeStatus {
   systemProxyApplied: boolean;
 }
 
+/** 全局代理的对外状态：一个开关背后的全部事实 */
+export interface GlobalProxyState {
+  /** 是否已开启（网关在跑 + 系统代理已接管） */
+  enabled: boolean;
+  /** 当前正在进行的步骤，用于界面上显示进度 */
+  phase: 'off' | 'starting' | 'applying' | 'on' | 'stopping' | 'error';
+  /** 本机网关监听地址，未运行为 null */
+  listen: string | null;
+  /** 出错时的中文说明 */
+  error: string | null;
+}
+
+/** 开启/关闭全局代理的结果 */
+export interface GlobalProxyResult {
+  ok: boolean;
+  state: GlobalProxyState;
+  error: string | null;
+}
+
 /** 上游代理连通性测试结果 */
 export interface TestResult {
   ok: boolean;
@@ -131,8 +156,6 @@ export interface ProxyBridgeApi {
   getConfig(): Promise<SafeConfig>;
   saveConfig(patch: DeepPartial<AppConfig>): Promise<SafeConfig>;
   getStatus(): Promise<BridgeStatus>;
-  startBridge(): Promise<BridgeStatus>;
-  stopBridge(): Promise<BridgeStatus>;
   testUpstream(input?: {
     protocol?: UpstreamProtocol;
     host?: string;
@@ -141,18 +164,14 @@ export interface ProxyBridgeApi {
     username?: string;
     password?: string;
   }): Promise<TestResult>;
-  applySystemProxy(enabled: boolean): Promise<BridgeStatus>;
-  getConnections(): Promise<ConnRecord[]>;
-  clearConnections(): Promise<void>;
-  openExternal(url: string): Promise<void>;
-  /** 用系统文件管理器打开某个目录（用于引导用户加载插件） */
+
+  /* 全局代理：界面上的那一个开关 */
+  getGlobalProxyState(): Promise<GlobalProxyState>;
+  setGlobalProxy(enabled: boolean): Promise<GlobalProxyResult>;
+  onGlobalProxyState(listener: (state: GlobalProxyState) => void): () => void;
+
+  /** 用系统文件管理器打开某个目录 */
   openPath(target: string): Promise<void>;
-  /** 订阅状态推送，返回取消订阅函数 */
-  onStatus(listener: (status: BridgeStatus) => void): () => void;
-  /** 订阅连接记录推送 */
-  onConnection(listener: (record: ConnRecord) => void): () => void;
-  /** 插件安装包所在目录（便于用户加载扩展） */
-  getPluginPath(): Promise<string>;
   getAppInfo(): Promise<{ version: string; electron: string; node: string; userData: string }>;
 }
 
@@ -184,7 +203,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     direct: ['localhost', '127.0.0.1', '::1', '*.local', '10.*', '192.168.*'],
     proxy: [],
   },
-  systemProxy: {
+  globalProxy: {
     enabled: false,
     alsoHttps: true,
   },

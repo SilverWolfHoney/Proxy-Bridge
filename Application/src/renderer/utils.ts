@@ -1,5 +1,12 @@
 /** 渲染层通用小工具 */
 
+/** 各协议的常见端口，仅用于输入框占位提示 */
+export const DEFAULT_PORTS: Record<string, number> = {
+  http: 8080,
+  https: 8443,
+  socks5: 1080,
+};
+
 /** 字节数转可读文本 */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
@@ -20,13 +27,6 @@ export function formatLatency(ms: number | null): string {
   return `${(ms / 1000).toFixed(2)} s`;
 }
 
-/** 时刻显示 HH:MM:SS */
-export function formatTime(timestamp: number): string {
-  const d = new Date(timestamp);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-
 /** 运行时长 */
 export function formatDuration(startedAt: number | null): string {
   if (!startedAt) return '—';
@@ -37,29 +37,4 @@ export function formatDuration(startedAt: number | null): string {
   if (h > 0) return `${h} 小时 ${m} 分`;
   if (m > 0) return `${m} 分 ${s} 秒`;
   return `${s} 秒`;
-}
-
-/** 把规则数组格式化成多行文本 */
-export function rulesToText(rules: string[]): string {
-  return rules.join('\n');
-}
-
-/** 把多行文本解析成规则数组 */
-export function textToRules(text: string): string[] {
-  return text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !line.startsWith('#') && !line.startsWith('//'));
-}
-
-/** 简易防抖，用于输入框自动保存 */
-export function debounce<T extends (...args: never[]) => void>(fn: T, waitMs: number): (...args: Parameters<T>) => void {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  return (...args: Parameters<T>) => {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => {
-      timer = null;
-      fn(...args);
-    }, waitMs);
-  };
 }

@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AppConfig, DeepPartial, ProxyBridgeApi, SafeConfig } from '../../shared/types';
 
+/** 界面组件用它提交配置改动 */
+export type ConfigUpdater = (patch: DeepPartial<AppConfig>) => void;
+
 export interface UseConfigResult {
   config: SafeConfig | null;
-  patch: (next: DeepPartial<AppConfig>) => void;
+  patch: ConfigUpdater;
   /** 立即把待写入的改动落盘，返回后配置已生效 */
   flush: () => Promise<void>;
 }

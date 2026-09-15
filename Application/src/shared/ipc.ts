@@ -6,20 +6,15 @@ export const IPC = {
   getConfig: 'config:get',
   saveConfig: 'config:save',
   getStatus: 'bridge:status',
-  startBridge: 'bridge:start',
-  stopBridge: 'bridge:stop',
   testUpstream: 'upstream:test',
-  applySystemProxy: 'systemProxy:apply',
-  getConnections: 'connections:get',
-  clearConnections: 'connections:clear',
-  openExternal: 'shell:openExternal',
+
+  /* 全局代理：界面上只有一个开关，背后是「启网关 + 接管系统代理」 */
+  getGlobalProxyState: 'globalProxy:get',
+  setGlobalProxy: 'globalProxy:set',
+  globalProxyEvent: 'globalProxy:changed',
+
   openPath: 'shell:openPath',
-  getPluginPath: 'app:pluginPath',
   appInfo: 'app:info',
-  /** 主进程 → 渲染进程：状态推送 */
-  statusEvent: 'bridge:status:changed',
-  /** 主进程 → 渲染进程：新连接记录 */
-  connectionEvent: 'bridge:connection',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

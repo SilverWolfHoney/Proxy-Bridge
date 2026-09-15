@@ -10,8 +10,9 @@ import { IPC } from '../shared/ipc';
 import type {
   AppConfig,
   BridgeStatus,
-  ConnRecord,
   DeepPartial,
+  GlobalProxyResult,
+  GlobalProxyState,
   ProxyBridgeApi,
   SafeConfig,
   TestResult,
@@ -25,24 +26,20 @@ const api: ProxyBridgeApi = {
 
   getStatus: () => ipcRenderer.invoke(IPC.getStatus) as Promise<BridgeStatus>,
 
-  startBridge: () => ipcRenderer.invoke(IPC.startBridge) as Promise<BridgeStatus>,
-
-  stopBridge: () => ipcRenderer.invoke(IPC.stopBridge) as Promise<BridgeStatus>,
-
   testUpstream: (input) => ipcRenderer.invoke(IPC.testUpstream, input) as Promise<TestResult>,
 
-  applySystemProxy: (enabled: boolean) =>
-    ipcRenderer.invoke(IPC.applySystemProxy, enabled) as Promise<BridgeStatus>,
+  getGlobalProxyState: () => ipcRenderer.invoke(IPC.getGlobalProxyState) as Promise<GlobalProxyState>,
 
-  getConnections: () => ipcRenderer.invoke(IPC.getConnections) as Promise<ConnRecord[]>,
+  setGlobalProxy: (enabled: boolean) =>
+    ipcRenderer.invoke(IPC.setGlobalProxy, enabled) as Promise<GlobalProxyResult>,
 
-  clearConnections: () => ipcRenderer.invoke(IPC.clearConnections) as Promise<void>,
-
-  openExternal: (url: string) => ipcRenderer.invoke(IPC.openExternal, url) as Promise<void>,
+  onGlobalProxyState: (listener: (state: GlobalProxyState) => void) => {
+    const handler = (_event: unknown, state: GlobalProxyState) => listener(state);
+    ipcRenderer.on(IPC.globalProxyEvent, handler);
+    return () => ipcRenderer.off(IPC.globalProxyEvent, handler);
+  },
 
   openPath: (target: string) => ipcRenderer.invoke(IPC.openPath, target) as Promise<void>,
-
-  getPluginPath: () => ipcRenderer.invoke(IPC.getPluginPath) as Promise<string>,
 
   getAppInfo: () =>
     ipcRenderer.invoke(IPC.appInfo) as Promise<{
@@ -51,18 +48,6 @@ const api: ProxyBridgeApi = {
       node: string;
       userData: string;
     }>,
-
-  onStatus: (listener: (status: BridgeStatus) => void) => {
-    const handler = (_event: unknown, status: BridgeStatus) => listener(status);
-    ipcRenderer.on(IPC.statusEvent, handler);
-    return () => ipcRenderer.off(IPC.statusEvent, handler);
-  },
-
-  onConnection: (listener: (record: ConnRecord) => void) => {
-    const handler = (_event: unknown, record: ConnRecord) => listener(record);
-    ipcRenderer.on(IPC.connectionEvent, handler);
-    return () => ipcRenderer.off(IPC.connectionEvent, handler);
-  },
 };
 
 contextBridge.exposeInMainWorld('proxyBridge', api);

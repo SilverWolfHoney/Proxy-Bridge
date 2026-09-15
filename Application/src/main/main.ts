@@ -1,27 +1,28 @@
 /**
  * 主进程入口。
  *
- * 职责：
- *  - 创建窗口、注册 IPC
- *  - 持有配置（含明文凭据）并驱动本地网关
- *  - 接管/还原系统代理
- *  - 退出时保证清理干净，不留残余代理设置
+ * 设计取向：这是一个**全局代理**工具。
+ * 界面上只有一个开关，它背后自动完成三件事：
+ *   开启 → 校验服务器可用 → 启动本机网关 → 接管 Windows 系统代理
+ *   关闭 → 还原系统代理 → 停止本机网关
+ * 「本机网关」是实现全局代理的必要环节（Windows 系统代理只能指向本机地址），
+ * 不是需要用户理解的概念，因此它的参数被收进「高级设置」。
  */
 
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import path from 'node:path';
-import fs from 'node:fs';
 import { ConfigStore } from './store';
 import { ProxyBridge } from '../core/bridge';
 import { testUpstream } from '../core/tester';
-import { SystemProxyManager, flushDns } from './systemProxy';
+import { SystemProxyManager } from './systemProxy';
 import { IPC } from '../shared/ipc';
 import {
   isUpstreamConfigured,
   type AppConfig,
   type BridgeStatus,
-  type ConnRecord,
   type DeepPartial,
+  type GlobalProxyResult,
+  type GlobalProxyState,
   type SafeConfig,
   type TestResult,
   type UpstreamConfig,
@@ -41,19 +42,156 @@ let mainWindow: BrowserWindow | null = null;
 let store: ConfigStore;
 let systemProxy: SystemProxyManager;
 let bridge: ProxyBridge;
-/** 系统代理当前是否指向本机网关 */
+
+/** 系统代理当前是否由本应用接管 */
 let systemProxyApplied = false;
+/** 全局代理当前阶段 */
+let globalPhase: GlobalProxyState['phase'] = 'off';
+/** 全局代理最近一次的错误，供界面显示 */
+let globalError: string | null = null;
+/** 是否正在切换，避免连点导致状态错乱 */
+let switching = false;
+/** 启动时自动恢复全局代理的过程中，不向界面报错 */
+let restoring = false;
 /** 是否已进入退出流程，避免 before-quit 重入 */
 let quitting = false;
 
 /* ------------------------------------------------------------------ */
-/* 工具                                                                */
+/* 全局代理状态                                                        */
 /* ------------------------------------------------------------------ */
 
-/** 给状态快照填上主进程才知道的字段 */
-function currentStatus(): BridgeStatus {
-  return { ...bridge.getStatus(), systemProxyApplied };
+function currentGlobalState(): GlobalProxyState {
+  const status = bridge.getStatus();
+  return {
+    enabled: systemProxyApplied && status.state === 'running',
+    phase: globalPhase,
+    listen: status.listen,
+    error: globalError,
+  };
 }
+
+function broadcastGlobalState(): void {
+  const payload = currentGlobalState();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(IPC.globalProxyEvent, payload);
+  }
+}
+
+function setPhase(phase: GlobalProxyState['phase']): void {
+  globalPhase = phase;
+  // 启动时自动恢复全局代理属于后台行为：中间阶段不推给界面，
+  // 免得窗口刚打开就闪一下「正在启动…」
+  if (restoring && (phase === 'starting' || phase === 'applying')) return;
+  broadcastGlobalState();
+}
+
+/* ------------------------------------------------------------------ */
+/* 开关的两个方向                                                      */
+/* ------------------------------------------------------------------ */
+
+/** 把配置同步给网关实例（不改动监听参数以外的行为） */
+function pushConfigToBridge(): AppConfig {
+  const config = store.getConfig();
+  bridge.updateOptions({
+    host: config.bridge.host,
+    port: config.bridge.port,
+    upstream: config.upstream,
+    rules: config.rules,
+  });
+  return config;
+}
+
+/**
+ * 开启全局代理。
+ * @param options.skipVerify 跳过服务器连通性校验（仅在启动时自动恢复用，避免拖延启动）
+ */
+async function enableGlobalProxy(options: { skipVerify?: boolean } = {}): Promise<GlobalProxyResult> {
+  if (switching) {
+    return { ok: false, state: currentGlobalState(), error: '正在切换中，请稍候' };
+  }
+  switching = true;
+  globalError = null;
+
+  try {
+    const config = pushConfigToBridge();
+
+    if (!isUpstreamConfigured(config.upstream)) {
+      globalError = '请先填写代理服务器地址和端口';
+      setPhase('error');
+      return { ok: false, state: currentGlobalState(), error: globalError };
+    }
+
+    // 1) 先确认服务器真的能用：否则开着全局代理等于让整台电脑断网
+    if (!options.skipVerify) {
+      setPhase('starting');
+      const test = await testUpstream(config.upstream);
+      if (!test.ok) {
+        globalError = test.error ?? '代理服务器无法连接';
+        setPhase('error');
+        return { ok: false, state: currentGlobalState(), error: globalError };
+      }
+    }
+
+    // 2) 启动本机网关
+    setPhase('starting');
+    const bridgeStatus = await bridge.start();
+    if (bridgeStatus.state !== 'running') {
+      globalError = bridgeStatus.error ?? '本机代理端口启动失败';
+      setPhase('error');
+      return { ok: false, state: currentGlobalState(), error: globalError };
+    }
+
+    // 3) 接管系统代理
+    setPhase('applying');
+    const applied = await systemProxy.apply(config.bridge.host, config.bridge.port, config.rules.direct);
+    if (!applied.ok) {
+      globalError = applied.error ?? '接管系统代理失败';
+      setPhase('error');
+      return { ok: false, state: currentGlobalState(), error: globalError };
+    }
+
+    systemProxyApplied = true;
+    store.save({ globalProxy: { enabled: true } });
+    setPhase('on');
+    return { ok: true, state: currentGlobalState(), error: null };
+  } finally {
+    switching = false;
+  }
+}
+
+/** 关闭全局代理：先还原系统代理，再停网关 */
+async function disableGlobalProxy(): Promise<GlobalProxyResult> {
+  if (switching) {
+    return { ok: false, state: currentGlobalState(), error: '正在切换中，请稍候' };
+  }
+  switching = true;
+  globalError = null;
+
+  try {
+    setPhase('stopping');
+
+    if (systemProxyApplied || systemProxy.hasStaleSnapshot) {
+      const restored = await systemProxy.restore();
+      if (!restored.ok) {
+        globalError = restored.error ?? '还原系统代理失败';
+        setPhase('error');
+        return { ok: false, state: currentGlobalState(), error: globalError };
+      }
+    }
+    systemProxyApplied = false;
+
+    await bridge.stop();
+    store.save({ globalProxy: { enabled: false } });
+    setPhase('off');
+    return { ok: true, state: currentGlobalState(), error: null };
+  } finally {
+    switching = false;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 工具                                                                */
+/* ------------------------------------------------------------------ */
 
 /** 合并磁盘配置与本次测试用的临时输入，得到一份完整可用的上游配置 */
 function resolveUpstream(input?: {
@@ -79,65 +217,16 @@ function resolveUpstream(input?: {
   };
 }
 
-function broadcast(channel: string, payload: unknown): void {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(channel, payload);
-  }
-}
-
-/** 插件目录位置：打包后随资源一起发布，开发时就是仓库里的 Plugin 目录 */
-function pluginDir(): string {
-  const packed = path.join(process.resourcesPath ?? '', 'Plugin');
-  if (app.isPackaged && fs.existsSync(packed)) return packed;
-  return path.resolve(app.getAppPath(), '..', 'Plugin');
-}
-
-/* ------------------------------------------------------------------ */
-/* 网关与系统代理                                                       */
-/* ------------------------------------------------------------------ */
-
-async function startBridgeAndMaybeSystemProxy(): Promise<BridgeStatus> {
-  const config = store.getConfig();
-  bridge.updateOptions({
-    host: config.bridge.host,
-    port: config.bridge.port,
-    upstream: config.upstream,
-    rules: config.rules,
-  });
-
-  const status = await bridge.start();
-
-  if (status.state === 'running' && config.systemProxy.enabled) {
-    const result = await systemProxy.apply(config.bridge.host, config.bridge.port, config.rules.direct);
-    systemProxyApplied = result.ok;
-    if (!result.ok && result.error) {
-      bridge.emit('status', bridge.getStatus());
-      console.error('[systemProxy]', result.error);
-    }
-  }
-
-  return currentStatus();
-}
-
-async function stopBridgeAndRestoreSystemProxy(): Promise<BridgeStatus> {
-  if (systemProxyApplied || systemProxy.hasStaleSnapshot) {
-    const result = await systemProxy.restore();
-    if (result.ok) systemProxyApplied = false;
-    else console.error('[systemProxy]', result.error);
-  }
-  return bridge.stop();
-}
-
 /* ------------------------------------------------------------------ */
 /* 窗口                                                                */
 /* ------------------------------------------------------------------ */
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
-    width: 1080,
-    height: 760,
-    minWidth: 880,
-    minHeight: 620,
+    width: 620,
+    height: 620,
+    minWidth: 520,
+    minHeight: 480,
     show: false,
     backgroundColor: '#0f1115',
     title: 'Proxy Bridge',
@@ -182,102 +271,47 @@ function registerIpc(): void {
     const safe = store.save(patch ?? {});
     const config = store.getConfig();
 
-    // 监听地址或端口变了：必须重启监听才能生效
+    // 监听地址或端口变了：需要重启本机网关才能生效
     const portChanged =
       config.bridge.host !== before.bridge.host || config.bridge.port !== before.bridge.port;
 
-    bridge.updateOptions({
-      host: config.bridge.host,
-      port: config.bridge.port,
-      upstream: config.upstream,
-      rules: config.rules,
-    });
+    pushConfigToBridge();
 
     if (portChanged && bridge.getStatus().state === 'running') {
       void (async () => {
         await bridge.stop();
-        await startBridgeAndMaybeSystemProxy();
+        // 网关参数变了但系统代理还指着旧端口，这里重新拉起一次
+        if (systemProxyApplied || store.getConfig().globalProxy.enabled) {
+          await bridge.start();
+        }
       })();
-    } else if (systemProxyApplied) {
-      // 规则变了，绕过列表也要跟着更新
-      void systemProxy.apply(config.bridge.host, config.bridge.port, config.rules.direct);
     }
 
     return safe;
   });
 
-  ipcMain.handle(IPC.getStatus, (): BridgeStatus => currentStatus());
+  ipcMain.handle(IPC.getStatus, (): BridgeStatus => bridge.getStatus());
 
-  ipcMain.handle(IPC.startBridge, async (): Promise<BridgeStatus> => {
-    const config = store.getConfig();
-    if (!isUpstreamConfigured(config.upstream)) {
-      return {
-        ...currentStatus(),
-        error: '请先填写代理服务器地址和端口',
-      };
-    }
-    return startBridgeAndMaybeSystemProxy();
-  });
+  ipcMain.handle(IPC.getGlobalProxyState, (): GlobalProxyState => currentGlobalState());
 
-  ipcMain.handle(IPC.stopBridge, async (): Promise<BridgeStatus> => {
-    const status = await stopBridgeAndRestoreSystemProxy();
-    store.save({ systemProxy: { enabled: false } });
-    return { ...status, systemProxyApplied };
+  ipcMain.handle(IPC.setGlobalProxy, async (_e, enabled: boolean): Promise<GlobalProxyResult> => {
+    return enabled ? enableGlobalProxy() : disableGlobalProxy();
   });
 
   ipcMain.handle(
     IPC.testUpstream,
     async (_e, input?: Parameters<typeof resolveUpstream>[0]): Promise<TestResult> => {
-      const cfg = resolveUpstream(input);
       // 测试结果里绝不回显密码
-      return testUpstream(cfg);
+      return testUpstream(resolveUpstream(input));
     },
   );
 
-  ipcMain.handle(IPC.applySystemProxy, async (_e, enabled: boolean): Promise<BridgeStatus> => {
-    const config = store.getConfig();
-
-    if (enabled) {
-      if (bridge.getStatus().state !== 'running') {
-        return { ...currentStatus(), error: '请先启动网关，再接管系统代理' };
-      }
-      const result = await systemProxy.apply(config.bridge.host, config.bridge.port, config.rules.direct);
-      systemProxyApplied = result.ok;
-      store.save({ systemProxy: { enabled: result.ok } });
-      if (!result.ok && result.error) {
-        return { ...currentStatus(), error: result.error };
-      }
-      return currentStatus();
-    }
-
-    const result = await systemProxy.restore();
-    if (result.ok) {
-      systemProxyApplied = false;
-      store.save({ systemProxy: { enabled: false } });
-      await flushDns();
-      return currentStatus();
-    }
-    return { ...currentStatus(), error: result.error };
-  });
-
-  ipcMain.handle(IPC.getConnections, (): ConnRecord[] => bridge.getRecords());
-
-  ipcMain.handle(IPC.clearConnections, (): void => {
-    bridge.clearRecords();
-  });
-
-  ipcMain.handle(IPC.openExternal, async (_e, url: string): Promise<void> => {
-    if (/^https?:\/\//i.test(url)) await shell.openExternal(url);
-  });
-
   ipcMain.handle(IPC.openPath, async (_e, target: string): Promise<void> => {
-    // 只允许打开插件目录，避免渲染层借这个通道打开任意路径
-    const allowed = path.resolve(pluginDir());
+    // 只允许打开配置文件所在目录，避免渲染层借这个通道打开任意路径
+    const allowed = path.resolve(app.getPath('userData'));
     if (path.resolve(target) !== allowed) return;
     await shell.openPath(allowed);
   });
-
-  ipcMain.handle(IPC.getPluginPath, (): string => pluginDir());
 
   ipcMain.handle(IPC.appInfo, () => ({
     version: app.getVersion(),
@@ -291,7 +325,7 @@ function registerIpc(): void {
 /* 启动 / 退出                                                         */
 /* ------------------------------------------------------------------ */
 
-// 单实例：多开会导致网关端口冲突和配置互相覆盖
+// 单实例：多开会导致端口冲突和配置互相覆盖
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
@@ -316,24 +350,28 @@ if (!app.requestSingleInstanceLock()) {
       appVersion: app.getVersion(),
     });
 
-    bridge.on('status', (status: BridgeStatus) => {
-      broadcast(IPC.statusEvent, { ...status, systemProxyApplied });
-    });
-    bridge.on('connection', (record: ConnRecord) => {
-      broadcast(IPC.connectionEvent, record);
-    });
+    // 网关状态变化时同步刷新全局代理状态（界面据此显示运行时长等）
+    bridge.on('status', () => broadcastGlobalState());
 
     registerIpc();
     createWindow();
 
-    // 上次异常退出可能残留了系统代理设置，这里主动还原一次
+    // 上次异常退出可能残留了系统代理设置，先还原掉
     if (systemProxy.hasStaleSnapshot) {
       const restored = await systemProxy.restore();
-      if (restored.ok) systemProxyApplied = false;
+      systemProxyApplied = !restored.ok;
     }
 
-    if (config.bridge.autoStart && isUpstreamConfigured(config.upstream)) {
-      await startBridgeAndMaybeSystemProxy();
+    // 用户上次是开着全局代理的：自动恢复，跳过连通性校验以免拖慢启动
+    if (config.globalProxy.enabled && isUpstreamConfigured(config.upstream)) {
+      restoring = true;
+      const result = await enableGlobalProxy({ skipVerify: true });
+      restoring = false;
+      if (!result.ok && result.error) {
+        console.error('[startup] 自动恢复全局代理失败：', result.error);
+      }
+    } else {
+      broadcastGlobalState();
     }
 
     app.on('activate', () => {
@@ -352,7 +390,11 @@ if (!app.requestSingleInstanceLock()) {
 
     void (async () => {
       try {
-        await stopBridgeAndRestoreSystemProxy();
+        // 无论如何都要把系统代理还原回去，不能让用户退出后断网
+        if (systemProxyApplied || systemProxy.hasStaleSnapshot) {
+          await systemProxy.restore();
+        }
+        await bridge.stop();
       } catch (err) {
         console.error('[quit] 清理失败：', err);
       } finally {

@@ -28,6 +28,8 @@ interface StoredConfig extends Omit<AppConfig, 'upstream'> {
   upstream: StoredUpstream;
   /** 记录写入时的格式版本，便于以后迁移 */
   schemaVersion: number;
+  /** 早期版本用过的字段名，仅用于读取时兼容，不再写入 */
+  systemProxy?: AppConfig['globalProxy'];
 }
 
 const SCHEMA_VERSION = 1;
@@ -87,7 +89,7 @@ export class ConfigStore {
       upstream: { ...this.config.upstream },
       bridge: { ...this.config.bridge },
       rules: { direct: this.config.rules.direct.slice(), proxy: this.config.rules.proxy.slice() },
-      systemProxy: { ...this.config.systemProxy },
+      globalProxy: { ...this.config.globalProxy },
     };
   }
 
@@ -140,10 +142,10 @@ export class ConfigStore {
       if (raw.proxy !== undefined) next.rules.proxy = sanitizeStringList(raw.proxy, next.rules.proxy);
     }
 
-    if (isPlainObject(patch.systemProxy)) {
-      const raw = patch.systemProxy as DeepPartial<AppConfig['systemProxy']>;
-      if (typeof raw.enabled === 'boolean') next.systemProxy.enabled = raw.enabled;
-      if (typeof raw.alsoHttps === 'boolean') next.systemProxy.alsoHttps = raw.alsoHttps;
+    if (isPlainObject(patch.globalProxy)) {
+      const raw = patch.globalProxy as DeepPartial<AppConfig['globalProxy']>;
+      if (typeof raw.enabled === 'boolean') next.globalProxy.enabled = raw.enabled;
+      if (typeof raw.alsoHttps === 'boolean') next.globalProxy.alsoHttps = raw.alsoHttps;
     }
 
     this.config = next;
@@ -194,10 +196,16 @@ export class ConfigStore {
         if (ru.proxy !== undefined) base.rules.proxy = sanitizeStringList(ru.proxy, base.rules.proxy);
       }
 
-      if (isPlainObject(stored.systemProxy)) {
-        const sp = stored.systemProxy as Partial<AppConfig['systemProxy']>;
-        if (typeof sp.enabled === 'boolean') base.systemProxy.enabled = sp.enabled;
-        if (typeof sp.alsoHttps === 'boolean') base.systemProxy.alsoHttps = sp.alsoHttps;
+      // 兼容早期版本写下的 systemProxy 字段名（那时这个功能叫「系统代理」）
+      const storedGlobal = isPlainObject(stored.globalProxy)
+        ? stored.globalProxy
+        : isPlainObject(stored.systemProxy)
+          ? stored.systemProxy
+          : null;
+      if (storedGlobal) {
+        const gp = storedGlobal as Partial<AppConfig['globalProxy']>;
+        if (typeof gp.enabled === 'boolean') base.globalProxy.enabled = gp.enabled;
+        if (typeof gp.alsoHttps === 'boolean') base.globalProxy.alsoHttps = gp.alsoHttps;
       }
 
       return base;
@@ -229,7 +237,7 @@ export class ConfigStore {
       },
       bridge: { ...this.config.bridge },
       rules: { direct: this.config.rules.direct.slice(), proxy: this.config.rules.proxy.slice() },
-      systemProxy: { ...this.config.systemProxy },
+      globalProxy: { ...this.config.globalProxy },
     };
 
     const dir = path.dirname(this.filePath);
@@ -274,6 +282,6 @@ function cloneDefault(): AppConfig {
     upstream: { ...DEFAULT_CONFIG.upstream },
     bridge: { ...DEFAULT_CONFIG.bridge },
     rules: { direct: DEFAULT_CONFIG.rules.direct.slice(), proxy: DEFAULT_CONFIG.rules.proxy.slice() },
-    systemProxy: { ...DEFAULT_CONFIG.systemProxy },
+    globalProxy: { ...DEFAULT_CONFIG.globalProxy },
   };
 }

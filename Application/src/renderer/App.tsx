@@ -1,116 +1,58 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type {
-  AppConfig,
-  BridgeStatus,
-  ConnRecord,
-  DeepPartial,
-  SafeConfig,
-  TestResult,
-} from '../shared/types';
-import { ConfigPage } from './components/ConfigPage';
-import { RulesPage } from './components/RulesPage';
-import { LogsPage } from './components/LogsPage';
-import { AboutPage } from './components/AboutPage';
-import { Stats, StatusBadge } from './components/Stats';
+import { useCallback, useEffect, useState } from 'react';
+import type { AppConfig, DeepPartial } from '../shared/types';
+import { HomePage } from './components/HomePage';
 import { useConfig } from './hooks/useConfig';
+import type { GlobalProxyState, TestResult } from '../shared/types';
 
-type TabKey = 'config' | 'rules' | 'logs' | 'about';
-
-const TABS: { key: TabKey; label: string; icon: string }[] = [
-  { key: 'config', label: '代理服务器', icon: '⚙' },
-  { key: 'rules', label: '分流规则', icon: '⇄' },
-  { key: 'logs', label: '连接日志', icon: '≡' },
-  { key: 'about', label: '插件 / 关于', icon: '⌘' },
-];
-
-const EMPTY_STATUS: BridgeStatus = {
-  state: 'stopped',
+const INITIAL_GLOBAL_STATE: GlobalProxyState = {
+  enabled: false,
+  phase: 'off',
   listen: null,
   error: null,
-  stats: {
-    totalConnections: 0,
-    activeConnections: 0,
-    failedConnections: 0,
-    bytesUp: 0,
-    bytesDown: 0,
-    startedAt: null,
-  },
-  systemProxyApplied: false,
 };
 
 export function App(): JSX.Element {
-  const [tab, setTab] = useState<TabKey>('config');
-  const [status, setStatus] = useState<BridgeStatus>(EMPTY_STATUS);
-  const [connections, setConnections] = useState<ConnRecord[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [ready, setReady] = useState(false);
-
   const api = window.proxyBridge;
   const { config, patch, flush } = useConfig(api);
 
-  // 事件订阅只建立一次；用 ref 持有最新的记录写入逻辑避免重复订阅
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
+  const [globalState, setGlobalState] = useState<GlobalProxyState>(INITIAL_GLOBAL_STATE);
+  const [ready, setReady] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    let alive = true;
+
     void (async () => {
-      const [initialStatus, initialConnections] = await Promise.all([
-        api.getStatus(),
-        api.getConnections(),
-      ]);
-      if (!mounted.current) return;
-      setStatus(initialStatus);
-      setConnections(initialConnections.slice().reverse());
+      const state = await api.getGlobalProxyState();
+      if (!alive) return;
+      setGlobalState(state);
       setReady(true);
     })();
 
-    const offStatus = api.onStatus((next) => {
-      if (mounted.current) setStatus(next);
-    });
-    const offConn = api.onConnection((record) => {
-      if (!mounted.current) return;
-      setConnections((prev) => [record, ...prev].slice(0, 300));
+    // 主进程是状态的唯一来源，切换过程中会持续推送阶段变化
+    const off = api.onGlobalProxyState((state) => {
+      if (alive) setGlobalState(state);
     });
 
     return () => {
-      offStatus();
-      offConn();
+      alive = false;
+      off();
     };
   }, [api]);
 
-  /** 统一处理「先落盘再执行」，避免用未保存的配置去启动网关 */
-  const withFlush = useCallback(
-    async (action: () => Promise<BridgeStatus | void>) => {
+  const handleToggle = useCallback(
+    async (enabled: boolean) => {
       setBusy(true);
       try {
+        // 先把界面上正在编辑的内容落盘，否则切换用的还是旧参数
         await flush();
-        const result = await action();
-        if (result) setStatus(result);
+        const result = await api.setGlobalProxy(enabled);
+        setGlobalState(result.state);
       } finally {
         setBusy(false);
       }
     },
-    [flush],
-  );
-
-  const handleStart = useCallback(() => {
-    void withFlush(async () => api.startBridge());
-  }, [withFlush, api]);
-
-  const handleStop = useCallback(() => {
-    void withFlush(async () => api.stopBridge());
-  }, [withFlush, api]);
-
-  const handleToggleSystemProxy = useCallback(
-    (enabled: boolean) => {
-      void withFlush(async () => api.applySystemProxy(enabled));
-    },
-    [withFlush, api],
+    [api, flush],
   );
 
   const handleTest = useCallback(
@@ -118,113 +60,46 @@ export function App(): JSX.Element {
       await flush();
       return api.testUpstream(input);
     },
-    [flush, api],
+    [api, flush],
   );
 
-  const handleClearConnections = useCallback(() => {
-    void api.clearConnections().then(() => setConnections([]));
-  }, [api]);
-
-  const handlePatch = useCallback(
-    (next: DeepPartial<AppConfig>) => patch(next),
-    [patch],
-  );
+  const handlePatch = useCallback((next: DeepPartial<AppConfig>) => patch(next), [patch]);
 
   if (!ready || !config) {
     return (
-      <div className="app">
-        <div className="empty-state">正在初始化…</div>
+      <div className="app app--centered">
+        <div className="loading">正在读取配置…</div>
       </div>
     );
   }
-
-  const safeConfig: SafeConfig = config;
 
   return (
     <div className="app">
       <header className="app-header">
         <div className="brand">
           <span className="brand-mark">PB</span>
-          <span>Proxy Bridge</span>
+          <span className="brand-text">
+            <span className="brand-title">Proxy Bridge</span>
+            <span className="brand-sub">全局代理</span>
+          </span>
         </div>
-
-        <StatusBadge status={status} />
-
-        {status.listen && (
-          <span className="field-hint">
-            监听 <span className="code-inline">{status.listen}</span>
-          </span>
-        )}
-
-        {status.systemProxyApplied && (
-          <span className="badge badge-warn">
-            <span className="dot" />
-            系统代理已接管
-          </span>
-        )}
-
-        <div className="header-spacer" />
-
-        {status.state === 'running' ? (
-          <button className="btn btn-danger" onClick={handleStop} disabled={busy}>
-            停止网关
-          </button>
-        ) : (
-          <button className="btn btn-primary" onClick={handleStart} disabled={busy}>
-            启动网关
-          </button>
-        )}
+        <span className={`badge ${globalState.enabled ? 'badge-running' : 'badge-stopped'}`}>
+          <span className="dot" />
+          {globalState.enabled ? '运行中' : '未开启'}
+        </span>
       </header>
 
-      <div className="app-body">
-        <nav className="sidebar">
-          {TABS.map((item) => (
-            <button
-              key={item.key}
-              className={`nav-item ${tab === item.key ? 'active' : ''}`}
-              onClick={() => setTab(item.key)}
-            >
-              <span className="nav-icon">{item.icon}</span>
-              {item.label}
-              {item.key === 'logs' && connections.length > 0 && (
-                <span className="field-hint" style={{ marginLeft: 'auto' }}>
-                  {connections.length}
-                </span>
-              )}
-            </button>
-          ))}
-
-          <div className="sidebar-footer">
-            <div style={{ marginBottom: 6 }}>
-              <Stats status={status} />
-            </div>
-            仅监听本机回环
-          </div>
-        </nav>
-
-        <main className="content">
-          {tab === 'config' && (
-            <ConfigPage
-              config={safeConfig}
-              status={status}
-              patch={handlePatch}
-              testUpstream={handleTest}
-              onStart={handleStart}
-              onStop={handleStop}
-              onToggleSystemProxy={handleToggleSystemProxy}
-              busy={busy}
-            />
-          )}
-
-          {tab === 'rules' && <RulesPage config={safeConfig} patch={handlePatch} />}
-
-          {tab === 'logs' && (
-            <LogsPage connections={connections} status={status} onClear={handleClearConnections} />
-          )}
-
-          {tab === 'about' && <AboutPage config={safeConfig} />}
-        </main>
-      </div>
+      <main className="content">
+        <HomePage
+          config={config}
+          globalState={globalState}
+          patch={handlePatch}
+          flush={flush}
+          onToggle={handleToggle}
+          busy={busy}
+          testUpstream={handleTest}
+        />
+      </main>
     </div>
   );
 }
