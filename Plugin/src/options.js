@@ -1,300 +1,299 @@
 /**
  * 设置页逻辑。
  *
- * 只做两件事：编辑「本地端口 + 绕过列表」，以及展示桌面应用的在线状态。
- * 这里没有、也不会有任何远程代理服务器地址或凭据——那些由桌面应用自己管理。
+ * 只做三件事：编辑代理服务器信息、编辑绕过列表、把改动提交给后台立即生效。
+ * 后台是唯一状态源，本页不直接调用 chrome.proxy。
  */
 
 import {
   DEFAULT_CONFIG,
-  DEFAULT_STATE,
-  STORAGE_KEYS,
-  formatTime,
+  DEFAULT_PORTS,
+  PROXY_SCHEMES,
   isValidPort,
-  normalizeBypassList,
   normalizeConfig,
   sendToBackground,
 } from './shared.js';
 
 /** 界面元素引用。 */
 const el = {
+  scheme: document.getElementById('scheme'),
+  host: document.getElementById('host'),
   port: document.getElementById('port'),
+  authEnabled: document.getElementById('authEnabled'),
+  authFields: document.getElementById('authFields'),
+  username: document.getElementById('username'),
+  password: document.getElementById('password'),
+  togglePassword: document.getElementById('togglePassword'),
   bypassList: document.getElementById('bypassList'),
+  rememberPassword: document.getElementById('rememberPassword'),
+  status: document.getElementById('status'),
+  statusText: document.getElementById('statusText'),
+  feedback: document.getElementById('feedback'),
   save: document.getElementById('save'),
-  reset: document.getElementById('reset'),
-  recheck: document.getElementById('recheck'),
-  message: document.getElementById('message'),
-  savedAt: document.getElementById('savedAt'),
-  appLight: document.getElementById('appLight'),
-  appText: document.getElementById('appText'),
-  proxyText: document.getElementById('proxyText'),
+  applyNow: document.getElementById('applyNow'),
+  resetDefaults: document.getElementById('resetDefaults'),
 };
 
-/** 当前配置与运行时状态。 */
+/** 当前配置。 */
 let config = normalizeConfig(null);
-let state = { ...DEFAULT_STATE };
 /** 是否正在提交。 */
 let busy = false;
-/** 短暂的保存反馈，优先于常驻提示显示。 */
-let feedback = null;
-/** 反馈自动清除的定时器。 */
-let feedbackTimer = null;
+/** 用户是否动过密码框（没动过就沿用已保存的密码）。 */
+let passwordTouched = false;
 
 /**
- * 显示一条临时反馈（保存成功/失败等）。
- * @param {string} text 反馈内容
- * @param {'ok'|'warn'|'error'} [kind] 反馈类型
- * @param {number} [duration] 自动清除毫秒数，0 表示不自动清除
+ * 显示反馈信息。
+ * @param {string} text 内容
+ * @param {'ok'|'error'} [kind] 类型
  * @returns {void}
  */
-function showFeedback(text, kind = 'ok', duration = 4000) {
-  feedback = { text, kind };
-  if (feedbackTimer !== null) {
-    clearTimeout(feedbackTimer);
-    feedbackTimer = null;
-  }
-  if (duration > 0) {
-    feedbackTimer = setTimeout(() => {
-      feedback = null;
-      feedbackTimer = null;
-      render();
-    }, duration);
-  }
-  render();
-}
-
-/**
- * 把配置回填到表单。
- * @returns {void}
- */
-function fillForm() {
-  el.port.value = String(config.port);
-  el.bypassList.value = config.bypassList.join('\n');
-  el.port.classList.remove('input--invalid');
-}
-
-/**
- * 刷新状态栏与提示信息。
- * @returns {void}
- */
-function render() {
-  const online = state.appOnline === true;
-  const everChecked = Number(state.lastCheckedAt) > 0;
-  const enabled = config.enabled === true;
-
-  // 状态栏
-  el.appLight.className = `light ${online ? 'light--on' : everChecked ? 'light--off' : 'light--unknown'}`;
-  el.appText.textContent = online
-    ? `桌面应用：运行中${state.appVersion ? ` · v${state.appVersion}` : ''}`
-    : everChecked
-      ? '桌面应用：未运行'
-      : '桌面应用：检测中…';
-
-  if (state.proxyApplied) {
-    el.proxyText.textContent = `代理：已启用（${config.port}）`;
-  } else if (enabled) {
-    el.proxyText.textContent = '代理：已降级为直连';
-  } else {
-    el.proxyText.textContent = '代理：已关闭';
-  }
-
-  el.savedAt.textContent = state.lastCheckedAt ? `最近检测 ${formatTime(state.lastCheckedAt)}` : '';
-
-  // 提示信息：临时反馈优先，其次是常驻的离线/错误提示
-  let text = '';
-  let kind = 'warn';
-
-  if (feedback) {
-    text = feedback.text;
-    kind = feedback.kind === 'ok' ? 'ok' : feedback.kind;
-  } else if (state.lastError) {
-    text = state.lastError;
-    kind = 'error';
-  } else if (!online && everChecked) {
-    text = `未检测到桌面应用（${state.probeError || '连接失败'}）。开启代理后会自动降级为直连，浏览器不会断网。`;
-    kind = 'warn';
-  }
-
+function showFeedback(text, kind = 'ok') {
   if (!text) {
-    el.message.hidden = true;
-    el.message.textContent = '';
-  } else {
-    el.message.hidden = false;
-    el.message.textContent = text;
-    el.message.className =
-      kind === 'ok' ? 'message' : kind === 'error' ? 'message message--error' : 'message message--warn';
-  }
-
-  el.save.disabled = busy;
-  el.reset.disabled = busy;
-  el.recheck.disabled = busy;
-}
-
-/**
- * 保存表单内容并让后台立即重新应用代理。
- * @returns {Promise<void>} 无返回值
- */
-async function save() {
-  const portText = el.port.value.trim();
-
-  if (!isValidPort(portText)) {
-    el.port.classList.add('input--invalid');
-    showFeedback('端口必须是 1–65535 之间的整数。', 'error', 0);
-    el.port.focus();
+    el.feedback.hidden = true;
+    el.feedback.textContent = '';
     return;
   }
-
-  el.port.classList.remove('input--invalid');
-  const port = Number.parseInt(portText, 10);
-  const bypassList = normalizeBypassList(el.bypassList.value);
-
-  busy = true;
-  render();
-
-  try {
-    const response = await sendToBackground({ type: 'saveConfig', port, bypassList });
-    config = normalizeConfig(response.config);
-    state = { ...DEFAULT_STATE, ...(response.state || {}) };
-    fillForm();
-    busy = false;
-
-    if (state.lastError) {
-      showFeedback(`已保存，但应用代理时出错：${state.lastError}`, 'error', 0);
-    } else if (config.enabled && !state.appOnline) {
-      showFeedback('已保存。当前未检测到桌面应用，代理处于直连降级状态。', 'warn');
-    } else {
-      showFeedback(`已保存并生效：127.0.0.1:${config.port}`, 'ok');
-    }
-  } catch (error) {
-    busy = false;
-    showFeedback(`保存失败：${String(error?.message || error)}`, 'error', 0);
+  el.feedback.hidden = false;
+  el.feedback.textContent = text;
+  el.feedback.className = kind === 'error' ? 'feedback feedback--error' : 'feedback feedback--ok';
+  if (kind === 'ok') {
+    setTimeout(() => {
+      if (el.feedback.textContent === text) showFeedback('');
+    }, 2600);
   }
-
-  render();
 }
 
 /**
- * 把表单恢复为默认值（需再点保存才会生效）。
+ * 根据协议与认证开关调整界面提示。
  * @returns {void}
  */
-function resetToDefault() {
-  el.port.value = String(DEFAULT_CONFIG.port);
-  el.bypassList.value = DEFAULT_CONFIG.bypassList.join('\n');
-  el.port.classList.remove('input--invalid');
-  showFeedback('已填入默认值，点击「保存并立即生效」后生效。', 'warn');
+function syncFieldVisibility() {
+  el.authFields.hidden = el.authEnabled.checked !== true;
+  el.port.placeholder = String(DEFAULT_PORTS[el.scheme.value] ?? 8080);
+}
+
+/** 把配置渲染到表单。 */
+function render() {
+  el.scheme.value = PROXY_SCHEMES.includes(config.scheme) ? config.scheme : DEFAULT_CONFIG.scheme;
+  el.host.value = config.host;
+  el.port.value = config.port > 0 ? String(config.port) : '';
+
+  el.authEnabled.checked = config.authEnabled === true;
+  el.username.value = config.username;
+  // 选择不记住密码时存储里没有密码，需要用户重新输入
+  el.password.value = config.password;
+  passwordTouched = false;
+
+  el.bypassList.value = config.bypassList.join('\n');
+  el.rememberPassword.checked = config.rememberPassword === true;
+
+  syncFieldVisibility();
+
+  const enabled = config.enabled === true;
+  const configured = Boolean(config.host && config.port > 0);
+  el.status.className = `status ${enabled && configured ? 'status--on' : 'status--off'}`;
+  el.statusText.textContent =
+    enabled && configured
+      ? `代理已开启 · ${config.scheme}://${config.host}:${config.port}`
+      : configured
+        ? '代理已关闭'
+        : '尚未配置代理服务器';
 }
 
 /**
- * 从后台拉取配置与状态。
- * @param {{probe?: boolean}} [options] probe=true 时要求后台立即重新探测桌面应用
- * @returns {Promise<void>} 无返回值
+ * 从表单读取配置草稿并校验。
+ * @returns {{ok: true, value: object} | {ok: false, error: string, focus: HTMLElement}} 校验结果
  */
-async function pullStatus({ probe = false } = {}) {
-  const response = await sendToBackground({ type: probe ? 'refresh' : 'getStatus' });
-  config = normalizeConfig(response.config);
-  state = { ...DEFAULT_STATE, ...(response.state || {}) };
+function readForm() {
+  const host = el.host.value.trim();
+  if (!host) {
+    return { ok: false, error: '请填写代理服务器地址', focus: el.host };
+  }
+  if (/^[a-z]+:\/\//i.test(host)) {
+    return { ok: false, error: '服务器地址不要带协议前缀，例如直接填 proxy.example.com', focus: el.host };
+  }
+  if (/\s/.test(host)) {
+    return { ok: false, error: '服务器地址不能包含空格', focus: el.host };
+  }
+
+  const portText = el.port.value.trim();
+  if (!isValidPort(portText)) {
+    return { ok: false, error: '端口需要在 1–65535 之间', focus: el.port };
+  }
+
+  const authEnabled = el.authEnabled.checked === true;
+  if (authEnabled && !el.username.value.trim()) {
+    return { ok: false, error: '已启用认证，请填写用户名', focus: el.username };
+  }
+
+  return {
+    ok: true,
+    value: {
+      scheme: el.scheme.value,
+      host,
+      port: Number.parseInt(portText, 10),
+      authEnabled,
+      username: el.username.value,
+      // 用户没动过密码框就沿用已保存的密码，避免「保存一次就把密码清空」
+      password: passwordTouched ? el.password.value : config.password,
+      rememberPassword: el.rememberPassword.checked === true,
+      bypassList: el.bypassList.value
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean),
+    },
+  };
 }
 
 /**
- * 请求后台立即重新探测桌面应用。
- * @returns {Promise<void>} 无返回值
+ * 提交表单。
+ * @param {{silent?: boolean}} [options] 选项
+ * @returns {Promise<boolean>} 是否成功
  */
-async function recheck() {
+async function submit({ silent = false } = {}) {
+  if (busy) return false;
+
+  const result = readForm();
+  if (!result.ok) {
+    showFeedback(result.error, 'error');
+    result.focus.focus();
+    return false;
+  }
+
   busy = true;
-  render();
+  el.save.disabled = true;
   try {
-    await pullStatus({ probe: true });
-    showFeedback(
-      state.appOnline ? '已检测到桌面应用，连接正常。' : '仍未检测到桌面应用。',
-      state.appOnline ? 'ok' : 'warn',
-    );
+    const response = await sendToBackground({ type: 'saveConfig', ...result.value });
+    config = normalizeConfig(response.config);
+    render();
+    if (!silent) {
+      showFeedback(
+        config.enabled ? `已保存并生效：${config.scheme}://${config.host}:${config.port}` : '已保存',
+        'ok',
+      );
+    }
+    return true;
   } catch (error) {
-    showFeedback(`检测失败：${String(error?.message || error)}`, 'error', 0);
+    showFeedback(String(error?.message || error), 'error');
+    return false;
   } finally {
     busy = false;
-    render();
+    el.save.disabled = false;
   }
 }
 
-/**
- * 绑定界面事件。
- * @returns {void}
- */
+/** 重新把当前配置应用到浏览器。 */
+async function reapply() {
+  if (busy) return;
+  busy = true;
+  try {
+    const response = await sendToBackground({ type: 'refresh' });
+    config = normalizeConfig(response.config);
+    render();
+    showFeedback(config.enabled ? '已重新应用代理设置' : '代理当前是关闭状态', 'ok');
+  } catch (error) {
+    showFeedback(String(error?.message || error), 'error');
+  } finally {
+    busy = false;
+  }
+}
+
+/** 清空全部配置（连同代理一并关闭）。 */
+async function resetAll() {
+  if (busy) return;
+  const confirmed = window.confirm(
+    '确定要清空全部配置吗？代理会被关闭，服务器地址与账号密码都会从本扩展中删除。',
+  );
+  if (!confirmed) return;
+
+  busy = true;
+  try {
+    const response = await sendToBackground({
+      type: 'saveConfig',
+      scheme: DEFAULT_CONFIG.scheme,
+      host: '',
+      port: 0,
+      authEnabled: false,
+      username: '',
+      password: '',
+      rememberPassword: true,
+      bypassList: [...DEFAULT_CONFIG.bypassList],
+    });
+    config = normalizeConfig(response.config);
+    render();
+    showFeedback('已清空配置', 'ok');
+  } catch (error) {
+    showFeedback(String(error?.message || error), 'error');
+  } finally {
+    busy = false;
+  }
+}
+
+/** 绑定界面事件。 */
 function bindEvents() {
-  el.save.addEventListener('click', () => {
-    void save();
+  el.scheme.addEventListener('change', syncFieldVisibility);
+  el.authEnabled.addEventListener('change', syncFieldVisibility);
+
+  el.password.addEventListener('input', () => {
+    passwordTouched = true;
   });
 
-  el.reset.addEventListener('click', resetToDefault);
-
-  el.recheck.addEventListener('click', () => {
-    void recheck();
+  el.togglePassword.addEventListener('click', () => {
+    const showing = el.password.type === 'text';
+    el.password.type = showing ? 'password' : 'text';
+    el.togglePassword.textContent = showing ? '显示' : '隐藏';
   });
 
-  // 回车即保存（端口输入框）
-  el.port.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      void save();
-    }
-  });
-
-  el.port.addEventListener('input', () => {
-    el.port.classList.remove('input--invalid');
-  });
-
-  // 后台状态变化时同步刷新
-  chrome.storage.onChanged.addListener((changes, areaName) => {
-    let dirty = false;
-
-    if (areaName === 'local' && changes[STORAGE_KEYS.config]) {
-      config = normalizeConfig(changes[STORAGE_KEYS.config].newValue);
-      if (document.activeElement !== el.port && document.activeElement !== el.bypassList) {
-        fillForm();
+  // 输入框里按回车直接保存
+  for (const input of [el.host, el.port, el.username, el.password]) {
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        void submit();
       }
-      dirty = true;
-    }
+    });
+    input.addEventListener('input', () => showFeedback(''));
+  }
 
-    if (changes[STORAGE_KEYS.state]) {
-      state = { ...DEFAULT_STATE, ...(changes[STORAGE_KEYS.state].newValue || {}) };
-      dirty = true;
-    }
+  el.bypassList.addEventListener('input', () => showFeedback(''));
 
-    if (dirty && !busy) {
-      render();
-    }
+  el.save.addEventListener('click', () => {
+    void submit();
+  });
+
+  el.applyNow.addEventListener('click', () => {
+    void (async () => {
+      // 先把表单里的改动落盘再重新应用，避免用户以为「立即应用」会丢掉未保存的编辑
+      const saved = await submit({ silent: true });
+      if (saved) await reapply();
+    })();
+  });
+
+  el.resetDefaults.addEventListener('click', () => {
+    void resetAll();
+  });
+
+  // 配置被别处（弹窗）改动时同步到表单
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local' || !changes.config || busy) return;
+    config = normalizeConfig(changes.config.newValue);
+    render();
   });
 }
 
-/**
- * 初始化页面。
- * @returns {Promise<void>} 无返回值
- */
+/** 初始化。 */
 async function init() {
   bindEvents();
-  render();
 
   try {
-    // 先用缓存状态秒开
-    await pullStatus();
-    fillForm();
+    const response = await sendToBackground({ type: 'getStatus' });
+    config = normalizeConfig(response.config);
     render();
+    if (!config.host) {
+      showFeedback('请填写代理服务器地址与端口，然后点击保存', 'ok');
+    }
   } catch (error) {
-    showFeedback(`无法连接后台服务：${String(error?.message || error)}`, 'error', 0);
-    return;
-  }
-
-  // 首次打开时静默探测一次，避免一进页面就弹出「已检测到」的提示
-  busy = true;
-  render();
-  try {
-    await pullStatus({ probe: true });
-  } catch (error) {
-    showFeedback(`检测失败：${String(error?.message || error)}`, 'error', 0);
-  } finally {
-    busy = false;
-    fillForm();
-    render();
+    showFeedback(`无法读取配置：${String(error?.message || error)}`, 'error');
   }
 }
 

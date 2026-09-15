@@ -2,78 +2,75 @@
  * 共享常量与工具函数。
  *
  * 被 background.js / popup.js / options.js 以 ES Module 方式导入，
- * 保证「默认配置」「存储键名」「健康探测逻辑」三处只有一份实现。
+ * 保证「默认配置」「存储键名」「配置规范化」三处只有一份实现。
  *
- * 安全约定（硬性要求）：
- *   本文件以及整个插件内不得出现任何真实的远程代理服务器地址、端口、账号或密码。
- *   插件只认识两个东西：本机回环地址 127.0.0.1，以及用户自定义的本地端口。
- *   真实远程代理服务器与账号密码全部由桌面应用持有和管理。
+ * 设计前提：本扩展是**独立**的代理客户端。
+ *   它自己连接用户填写的远程代理服务器，不依赖、不探测、也不需要任何桌面应用。
+ *   因此这里不存在任何「本机端口」「健康检查」之类的概念。
  */
 
-/** 本地代理网关的固定监听地址（桌面应用监听在本机回环地址上）。 */
-export const LOCAL_PROXY_HOST = '127.0.0.1';
+/** 代理协议。与 chrome.proxy 的 ProxyServer.scheme 取值一一对应。 */
+export const PROXY_SCHEMES = Object.freeze(['http', 'https', 'socks5']);
 
-/** 桌面应用提供的健康检查端点路径。 */
-export const HEALTH_PATH = '/__proxybridge__/health';
-
-/** 健康检查期望的应用标识，用于避免误判本机其它 HTTP 服务。 */
-export const HEALTH_APP_ID = 'proxy-bridge';
-
-/** 默认配置：默认不开启代理，默认本地端口 7890，默认绕过本机地址。 */
-export const DEFAULT_CONFIG = Object.freeze({
-  enabled: false,
-  port: 7890,
-  bypassList: Object.freeze(['localhost', '127.0.0.1']),
-  /** 端口是否由「自动发现」写入（用户手动改端口后会被置回 false） */
-  portAutoFilled: false,
+/** 各协议默认端口，仅用于输入框占位提示。 */
+export const DEFAULT_PORTS = Object.freeze({
+  http: 8080,
+  https: 8443,
+  socks5: 1080,
 });
 
-/**
- * 自动发现端口时的候选列表。
- *
- * 桌面应用里改端口后，插件靠它自动跟上，用户不必在两处各填一遍。
- * 顺序有意义：越靠前越可能是用户正在用的端口。
- */
-export const CANDIDATE_PORTS = Object.freeze([7890, 7891, 7892, 7893, 8080, 8888, 1080, 10808, 20171, 7897]);
+/** 默认配置：默认关闭、不预置任何服务器信息。 */
+export const DEFAULT_CONFIG = Object.freeze({
+  /** 总开关：关闭时清除浏览器代理，恢复直连 */
+  enabled: false,
+  /** 代理协议 */
+  scheme: 'http',
+  /** 代理服务器地址（域名或 IP），空字符串表示尚未配置 */
+  host: '',
+  /** 代理服务器端口，0 表示尚未配置 */
+  port: 0,
+  /** 服务器是否需要用户名密码认证 */
+  authEnabled: false,
+  username: '',
+  /** 密码。是否明文写盘由 rememberPassword 决定 */
+  password: '',
+  /**
+   * 是否把密码保存到本地存储。
+   * 关闭时密码只留在内存中，Service Worker 休眠后需要重新填写 —— 这是隐私与便利的取舍。
+   */
+  rememberPassword: true,
+  /** 走直连、不经过代理的地址列表 */
+  bypassList: Object.freeze(['localhost', '127.0.0.1']),
+});
 
 /** chrome.storage 中使用的键名。 */
 export const STORAGE_KEYS = Object.freeze({
-  /** 持久配置，存放于 chrome.storage.local。 */
+  /** 持久配置，存放于 chrome.storage.local */
   config: 'config',
-  /** 运行时状态，存放于 chrome.storage.session（不可用时回退 local）。 */
+  /** 运行时状态，存放于 chrome.storage.session（不可用时回退 local） */
   state: 'runtimeState',
 });
 
 /** 运行时状态的默认值。 */
 export const DEFAULT_STATE = Object.freeze({
-  appOnline: false,
-  appVersion: '',
-  /** 桌面应用实际在监听的端口（自动发现的结果） */
-  appPort: 0,
-  lastCheckedAt: 0,
-  probeError: '',
+  /** 代理是否已真正写入浏览器 */
   proxyApplied: false,
-  degraded: false,
+  /** 最近一次操作的错误信息 */
   lastError: '',
+  /** 最近一次应用配置的时间 */
+  appliedAt: 0,
+  /** 最近一次变更原因，便于排查 */
   lastReason: '',
-  updatedAt: 0,
 });
 
 /** 端口合法范围。 */
 export const PORT_MIN = 1;
 export const PORT_MAX = 65535;
 
-/** 健康探测超时时间（毫秒）。 */
-export const HEALTH_TIMEOUT_MS = 1500;
-
-/** 存活期间的探测间隔（毫秒）。Service Worker 休眠后由 chrome.alarms 兜底。 */
-export const HEALTH_INTERVAL_MS = 3000;
-
-/** chrome.alarms 兜底探测的周期（分钟，0.5 = 30 秒，为 Chrome 允许的最小值）。 */
-export const HEALTH_ALARM_PERIOD_MINUTES = 0.5;
-
-/** chrome.alarms 名称。 */
-export const HEALTH_ALARM_NAME = 'proxy-bridge-health-check';
+/** 配置完全没填时，界面上提示用户去填写。 */
+export function isConfigured(config) {
+  return Boolean(config && config.host && config.host.trim() && config.port > 0);
+}
 
 /** 运行时状态存放区域：优先 session（会话级、不落盘），不可用时回退 local。 */
 const stateArea = chrome.storage.session || chrome.storage.local;
@@ -84,7 +81,7 @@ const stateArea = chrome.storage.session || chrome.storage.local;
  * @param {number} [fallback] 非法时返回的端口
  * @returns {number} 合法端口号
  */
-export function normalizePort(value, fallback = DEFAULT_CONFIG.port) {
+export function normalizePort(value, fallback = 0) {
   const port = Number.parseInt(String(value ?? ''), 10);
   if (!Number.isInteger(port) || port < PORT_MIN || port > PORT_MAX) {
     return fallback;
@@ -103,14 +100,21 @@ export function isValidPort(value) {
 }
 
 /**
+ * 判断协议是否受支持。
+ * @param {unknown} value 待校验的值
+ * @returns {boolean} 是否受支持
+ */
+export function isValidScheme(value) {
+  return PROXY_SCHEMES.includes(String(value));
+}
+
+/**
  * 规范化绕过列表：去空行、去首尾空格、去重、保序。
  * @param {unknown} value 字符串数组或换行分隔的字符串
  * @returns {string[]} 规范化后的绕过列表
  */
 export function normalizeBypassList(value) {
-  const raw = Array.isArray(value)
-    ? value
-    : String(value ?? '').split(/\r?\n/);
+  const raw = Array.isArray(value) ? value : String(value ?? '').split(/\r?\n/);
 
   const seen = new Set();
   const result = [];
@@ -128,172 +132,67 @@ export function normalizeBypassList(value) {
 /**
  * 把任意输入补齐成一份完整可用的配置对象。
  * @param {unknown} raw 原始配置
- * @returns {{enabled: boolean, port: number, bypassList: string[], portAutoFilled: boolean}} 规范化配置
+ * @returns {object} 规范化配置
  */
 export function normalizeConfig(raw) {
   const source = raw && typeof raw === 'object' ? raw : {};
-  // 字段缺失/为 null 时回退默认值；显式传入的空数组表示「用户就是要清空绕过列表」，需保留。
+
+  // 字段缺失/为 null 时回退默认值；显式传入的空数组表示「用户就是要清空」，需保留。
   const rawBypass = source.bypassList;
   const bypassList =
     rawBypass === undefined || rawBypass === null
       ? [...DEFAULT_CONFIG.bypassList]
       : normalizeBypassList(rawBypass);
 
+  const scheme = isValidScheme(source.scheme) ? String(source.scheme) : DEFAULT_CONFIG.scheme;
+  const rememberPassword = source.rememberPassword !== false;
+
   return {
     enabled: source.enabled === true,
+    scheme,
+    host: String(source.host ?? '').trim(),
     port: normalizePort(source.port, DEFAULT_CONFIG.port),
+    authEnabled: source.authEnabled === true,
+    username: String(source.username ?? ''),
+    // 选择不记住密码时不落盘：读取时始终返回空串，需要用户在界面重新输入
+    password: rememberPassword ? String(source.password ?? '') : '',
+    rememberPassword,
     bypassList,
-    portAutoFilled: source.portAutoFilled === true,
   };
 }
 
 /**
- * 构造健康检查地址。
- * @param {number} port 本地端口
- * @returns {string} 形如 http://127.0.0.1:7890/__proxybridge__/health
+ * 把配置整理成 chrome.proxy 需要的 ProxyConfig。
+ * @param {object} config 规范化配置
+ * @returns {object} chrome.proxy.settings.set 的 value
  */
-export function buildHealthUrl(port) {
-  return `http://${LOCAL_PROXY_HOST}:${normalizePort(port)}${HEALTH_PATH}`;
-}
-
-/**
- * 格式化用于展示的本地端点。
- * @param {number} port 本地端口
- * @returns {string} 形如 127.0.0.1:7890
- */
-export function formatEndpoint(port) {
-  return `${LOCAL_PROXY_HOST}:${normalizePort(port)}`;
-}
-
-/**
- * 把探测过程中的异常翻译成中文提示。
- * @param {unknown} error 捕获到的异常
- * @returns {string} 中文错误描述
- */
-export function describeProbeError(error) {
-  const name = String(error?.name || '');
-  if (name === 'AbortError') {
-    return `连接本机端口超时（超过 ${HEALTH_TIMEOUT_MS / 1000} 秒无响应）`;
-  }
-  if (name === 'TypeError') {
-    return '无法连接本机端口，桌面应用可能未运行';
-  }
-  return String(error?.message || error || '未知错误');
-}
-
-/**
- * 探测桌面应用是否在运行。
- *
- * 使用 AbortController 设置 1.5 秒超时，避免 Service Worker 被卡住。
- * 任何异常都被吞掉并转成普通对象，调用方无需再 try/catch。
- *
- * @param {number} port 本地端口
- * @returns {Promise<{online: boolean, port: number, version: string, error: string, checkedAt: number}>} 探测结果
- */
-export async function probeDesktopApp(port) {
-  const checkedAt = Date.now();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(buildHealthUrl(port), {
-      method: 'GET',
-      cache: 'no-store',
-      signal: controller.signal,
-      headers: { Accept: 'application/json' },
-    });
-
-    if (!response.ok) {
-      return {
-        online: false,
-        port: 0,
-        version: '',
-        error: `健康检查返回 HTTP ${response.status}`,
-        checkedAt,
-      };
-    }
-
-    const payload = await response.json().catch(() => null);
-    if (!payload || payload.app !== HEALTH_APP_ID || payload.ok !== true) {
-      return {
-        online: false,
-        port: 0,
-        version: '',
-        error: '端口已被占用，但响应不是本插件配套的桌面应用',
-        checkedAt,
-      };
-    }
-
-    return {
-      online: true,
-      port: normalizePort(port),
-      version: String(payload.version ?? ''),
-      error: '',
-      checkedAt,
-    };
-  } catch (error) {
-    return {
-      online: false,
-      port: 0,
-      version: '',
-      error: describeProbeError(error),
-      checkedAt,
-    };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
- * 自动发现桌面应用：先试配置里的端口，再依次试候选端口。
- *
- * 这样桌面应用里改了监听端口后，插件能自己跟上，不需要用户在两处各填一遍。
- * 同一台机器上的连接被拒绝是立即返回的，所以扫一遍候选端口几乎不花时间。
- *
- * @param {number} preferredPort 用户配置的端口，优先尝试
- * @returns {Promise<{online: boolean, port: number, version: string, error: string, checkedAt: number}>} 探测结果
- */
-export async function discoverDesktopApp(preferredPort) {
-  const tried = new Set();
-  let firstError = '';
-
-  /** 依次尝试这些端口，返回第一个命中的结果 */
-  const tryPorts = async (ports) => {
-    for (const candidate of ports) {
-      const port = normalizePort(candidate, 0);
-      if (!port || tried.has(port)) continue;
-      tried.add(port);
-
-      const result = await probeDesktopApp(port);
-      if (result.online) {
-        // 应用会在响应里报出自己真实的监听端口：若与刚试的端口不一致，
-        // 以它为准再确认一次，避免配置被写成一个其实不通的端口
-        if (result.port && result.port !== port) {
-          const confirmed = await probeDesktopApp(result.port);
-          if (confirmed.online) return confirmed;
-        }
-        return result;
-      }
-      if (!firstError && result.error) firstError = result.error;
-    }
-    return null;
-  };
-
-  const hit = await tryPorts([preferredPort, ...CANDIDATE_PORTS]);
-  if (hit) return hit;
-
+export function buildProxyValue(config) {
   return {
-    online: false,
-    port: 0,
-    version: '',
-    error: firstError || `本机 ${LOCAL_PROXY_HOST} 上没找到运行中的桌面应用`,
-    checkedAt: Date.now(),
+    mode: 'fixed_servers',
+    rules: {
+      singleProxy: {
+        scheme: config.scheme,
+        host: config.host,
+        port: config.port,
+      },
+      bypassList: config.bypassList,
+    },
   };
+}
+
+/**
+ * 把配置整理成给人看的一行描述。
+ * @param {object} config 规范化配置
+ * @returns {string} 形如 socks5://example.com:1080
+ */
+export function formatProxy(config) {
+  if (!isConfigured(config)) return '未配置';
+  return `${config.scheme}://${config.host}:${config.port}`;
 }
 
 /**
  * 读取配置（已补齐默认值）。
- * @returns {Promise<{enabled: boolean, port: number, bypassList: string[]}>} 配置
+ * @returns {Promise<object>} 配置
  */
 export async function readConfig() {
   const stored = await chrome.storage.local.get(STORAGE_KEYS.config);
@@ -303,7 +202,7 @@ export async function readConfig() {
 /**
  * 写入配置（局部更新，自动规范化）。
  * @param {object} patch 需要更新的字段
- * @returns {Promise<{enabled: boolean, port: number, bypassList: string[]}>} 写入后的完整配置
+ * @returns {Promise<object>} 写入后的完整配置
  */
 export async function writeConfig(patch) {
   const merged = normalizeConfig({ ...(await readConfig()), ...(patch || {}) });
@@ -312,9 +211,8 @@ export async function writeConfig(patch) {
 }
 
 /**
- * 确保 chrome.storage.local 中存在一份完整配置，返回该配置。
- * 仅在首次安装（配置缺失）时写入默认值，避免每次 Service Worker 唤醒都产生写入。
- * @returns {Promise<{enabled: boolean, port: number, bypassList: string[]}>} 配置
+ * 确保 chrome.storage.local 中存在一份完整配置。
+ * @returns {Promise<object>} 配置
  */
 export async function ensureConfig() {
   const stored = await chrome.storage.local.get(STORAGE_KEYS.config);
@@ -341,7 +239,7 @@ export async function readState() {
  * @returns {Promise<object>} 写入后的完整状态
  */
 export async function writeState(patch) {
-  const next = { ...(await readState()), ...(patch || {}), updatedAt: Date.now() };
+  const next = { ...(await readState()), ...(patch || {}) };
   await stateArea.set({ [STORAGE_KEYS.state]: next });
   return next;
 }

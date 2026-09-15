@@ -222,7 +222,7 @@ export function App(): JSX.Element {
             <LogsPage connections={connections} status={status} onClear={handleClearConnections} />
           )}
 
-          {tab === 'about' && <AboutPage bridgePort={safeConfig.bridge.port} />}
+          {tab === 'about' && <AboutPage config={safeConfig} />}
         </main>
       </div>
     </div>

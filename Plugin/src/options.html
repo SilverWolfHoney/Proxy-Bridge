@@ -3,100 +3,168 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>本地代理网关 · 设置</title>
+    <title>代理快速切换 · 设置</title>
     <link rel="stylesheet" href="options.css" />
   </head>
   <body>
     <div class="page">
-      <header class="page__header">
+      <header class="page__head">
         <div class="brand">
           <span class="brand__mark" aria-hidden="true"></span>
-          <div>
-            <h1 class="brand__title">本地代理网关 · 设置</h1>
-            <p class="brand__subtitle">把浏览器代理指向桌面应用提供的本地端口</p>
+          <div class="brand__text">
+            <h1 class="brand__title">代理快速切换</h1>
+            <p class="brand__subtitle">把浏览器代理指向你自己填写的代理服务器</p>
           </div>
         </div>
-        <div class="statusbar">
-          <span id="appLight" class="light light--unknown" aria-hidden="true"></span>
-          <span id="appText">桌面应用：检测中…</span>
-          <span class="divider" aria-hidden="true"></span>
-          <span id="proxyText">代理：未知</span>
+        <div id="status" class="status status--off">
+          <span class="status__dot" aria-hidden="true"></span>
+          <span id="statusText">代理已关闭</span>
         </div>
       </header>
 
       <main class="page__body">
-        <!-- 本地端口 -->
+        <!-- 代理服务器 -->
         <section class="card">
           <div class="card__head">
-            <h2 class="card__title">本地代理端口</h2>
+            <h2 class="card__title">代理服务器</h2>
             <p class="card__desc">
-              桌面应用在本机监听的 HTTP 代理端口，默认 <code>7890</code>。插件会把浏览器流量发送到
-              <code>127.0.0.1:该端口</code>，再由桌面应用转发出去。
+              填写你自己的远程代理服务器。浏览器会直接连接它，不经过任何本机程序。
             </p>
           </div>
-          <div class="field">
-            <label class="field__label" for="port">端口</label>
-            <input
-              id="port"
-              class="input input--port"
-              type="number"
-              min="1"
-              max="65535"
-              step="1"
-              inputmode="numeric"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="7890"
-            />
-            <span class="field__hint">
-              取值范围 1–65535。一般不用改：插件会自动探测桌面应用实际监听的端口并跟随过去，
-              这里填的值会被优先尝试。
-            </span>
+
+          <div class="grid">
+            <div class="field">
+              <label class="field__label" for="scheme">协议</label>
+              <select id="scheme" class="input">
+                <option value="http">HTTP 代理</option>
+                <option value="https">HTTPS 代理</option>
+                <option value="socks5">SOCKS5</option>
+              </select>
+              <span class="field__hint">
+                HTTP/HTTPS 支持自动填写账号密码；SOCKS5 的认证会由浏览器弹出输入框
+              </span>
+            </div>
+
+            <div class="field">
+              <label class="field__label" for="host">服务器地址</label>
+              <input
+                id="host"
+                class="input"
+                type="text"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="例如 proxy.example.com 或 203.0.113.10"
+              />
+              <span class="field__hint">不要带 <code>http://</code> 前缀</span>
+            </div>
+
+            <div class="field field--narrow">
+              <label class="field__label" for="port">端口</label>
+              <input
+                id="port"
+                class="input"
+                type="number"
+                min="1"
+                max="65535"
+                step="1"
+                inputmode="numeric"
+                autocomplete="off"
+                placeholder="8080"
+              />
+              <span class="field__hint">取值范围 1–65535</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- 认证 -->
+        <section class="card">
+          <div class="card__head">
+            <h2 class="card__title">认证</h2>
+            <p class="card__desc">服务器要求用户名密码时填写；不需要就保持关闭。</p>
+          </div>
+
+          <label class="switch">
+            <input id="authEnabled" type="checkbox" />
+            <span class="switch__track" aria-hidden="true"><span class="switch__thumb"></span></span>
+            <span class="switch__label">服务器需要用户名密码认证</span>
+          </label>
+
+          <div id="authFields" class="grid grid--auth" hidden>
+            <div class="field">
+              <label class="field__label" for="username">用户名</label>
+              <input
+                id="username"
+                class="input"
+                type="text"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="区分大小写"
+              />
+            </div>
+
+            <div class="field">
+              <label class="field__label" for="password">密码</label>
+              <div class="field__row">
+                <input
+                  id="password"
+                  class="input"
+                  type="password"
+                  autocomplete="new-password"
+                  spellcheck="false"
+                  placeholder="区分大小写"
+                />
+                <button id="togglePassword" class="btn btn--ghost" type="button">显示</button>
+              </div>
+            </div>
           </div>
         </section>
 
         <!-- 绕过列表 -->
         <section class="card">
           <div class="card__head">
-            <h2 class="card__title">绕过列表</h2>
-            <p class="card__desc">
-              每行一条，匹配的地址不走代理，直接连接。常用于本机地址和内网域名。
-            </p>
+            <h2 class="card__title">不经过代理的地址</h2>
+            <p class="card__desc">每行一条。命中的地址浏览器会直接连接，不发给代理服务器。</p>
           </div>
           <div class="field">
-            <label class="field__label" for="bypassList">不经过代理的地址</label>
             <textarea
               id="bypassList"
               class="input input--area"
               rows="6"
               spellcheck="false"
-              autocomplete="off"
-              placeholder="localhost&#10;127.0.0.1"
+              placeholder="localhost&#10;127.0.0.1&#10;*.internal"
             ></textarea>
-            <span class="field__hint">支持通配符写法，例如 <code>*.internal</code>；留空表示全部走代理。</span>
+            <span class="field__hint">
+              支持通配符写法，例如 <code>*.internal</code>；留空表示全部走代理。
+            </span>
           </div>
         </section>
 
-        <!-- 安全说明 -->
-        <section class="card card--note">
-          <h2 class="card__title">关于账号与密码</h2>
-          <p class="card__text">
-            本插件不保存任何远程服务器凭据，凭据由桌面应用管理。插件内部没有、也不接受远程代理服务器的地址、端口、用户名或密码，
-            它只认识本机回环地址 <code>127.0.0.1</code> 与上面填写的本地端口。
-          </p>
-          <p class="card__text card__text--dim">
-            换句话说：即使有人读取了本插件的全部数据，也只能看到一个本地端口号和一份绕过列表。
+        <!-- 隐私 -->
+        <section class="card card--quiet">
+          <div class="card__head">
+            <h2 class="card__title">凭据存储</h2>
+          </div>
+
+          <label class="switch">
+            <input id="rememberPassword" type="checkbox" />
+            <span class="switch__track" aria-hidden="true"><span class="switch__thumb"></span></span>
+            <span class="switch__label">把密码保存在浏览器扩展存储中</span>
+          </label>
+
+          <p class="card__note">
+            开启后密码会以同步存储的形式写在 <code>chrome.storage.local</code> 里，重启浏览器无需重填；
+            关闭后密码只保留在内存中，浏览器重启后需要重新输入。
+            无论哪种方式，密码都不会离开这台电脑，也不会发送到除你填写的代理服务器之外的任何地方。
           </p>
         </section>
-
-        <p id="message" class="message" hidden></p>
       </main>
 
-      <footer class="page__footer">
-        <button id="save" class="btn btn--primary" type="button">保存并立即生效</button>
-        <button id="reset" class="btn" type="button">恢复默认值</button>
-        <button id="recheck" class="btn btn--ghost" type="button">重新检测桌面应用</button>
-        <span id="savedAt" class="saved-at"></span>
+      <footer class="actions">
+        <span id="feedback" class="feedback" hidden></span>
+        <div class="actions__spacer"></div>
+        <button id="applyNow" class="btn btn--ghost" type="button">立即应用</button>
+        <button id="resetDefaults" class="btn btn--ghost" type="button">清空配置</button>
+        <button id="save" class="btn btn--primary" type="button">保存</button>
       </footer>
     </div>
 

@@ -8,8 +8,9 @@
 import {
   DEFAULT_STATE,
   STORAGE_KEYS,
-  formatEndpoint,
+  formatProxy,
   formatTime,
+  isConfigured,
   normalizeConfig,
   sendToBackground,
 } from './shared.js';
@@ -20,12 +21,10 @@ const el = {
   toggle: document.getElementById('toggle'),
   toggleTitle: document.getElementById('toggleTitle'),
   toggleHint: document.getElementById('toggleHint'),
-  appLight: document.getElementById('appLight'),
-  appText: document.getElementById('appText'),
-  endpoint: document.getElementById('endpoint'),
-  portSource: document.getElementById('portSource'),
+  server: document.getElementById('server'),
+  authText: document.getElementById('authText'),
   proxyState: document.getElementById('proxyState'),
-  checkedAt: document.getElementById('checkedAt'),
+  appliedAt: document.getElementById('appliedAt'),
   notice: document.getElementById('notice'),
   refresh: document.getElementById('refresh'),
   openOptions: document.getElementById('openOptions'),
@@ -54,89 +53,69 @@ function showNotice(text, kind = 'warn') {
   el.notice.className = kind === 'error' ? 'notice notice--error' : 'notice';
 }
 
-/**
- * 根据当前 config / state 刷新整个界面。
- * @returns {void}
- */
+/** 刷新整个界面。 */
 function render() {
   const enabled = config.enabled === true;
-  const online = state.appOnline === true;
-  const everChecked = Number(state.lastCheckedAt) > 0;
-  const endpoint = formatEndpoint(config.port);
+  const configured = isConfigured(config);
+  const applied = state.proxyApplied === true;
 
   // 主开关
   el.toggle.setAttribute('aria-checked', String(enabled));
-  el.toggleTitle.textContent = enabled ? '代理已开启' : '代理已关闭';
+  el.toggle.disabled = busy;
+
+  if (!configured) {
+    el.toggleTitle.textContent = '尚未配置代理服务器';
+    el.toggleHint.textContent = '请先打开设置填写服务器地址';
+  } else if (enabled) {
+    el.toggleTitle.textContent = '代理已开启';
+    el.toggleHint.textContent = `流量经由 ${config.host}:${config.port}`;
+  } else {
+    el.toggleTitle.textContent = '代理已关闭';
+    el.toggleHint.textContent = '点击开启代理';
+  }
 
   // 顶部徽章
-  if (!enabled) {
-    el.badge.textContent = '已关闭';
-    el.badge.className = 'badge badge--off';
-  } else if (state.proxyApplied) {
+  if (state.lastError) {
+    el.badge.textContent = '出错';
+    el.badge.className = 'badge badge--warn';
+  } else if (enabled && applied) {
     el.badge.textContent = '已开启';
     el.badge.className = 'badge badge--on';
   } else {
-    el.badge.textContent = '已降级';
-    el.badge.className = 'badge badge--warn';
+    el.badge.textContent = '已关闭';
+    el.badge.className = 'badge badge--off';
   }
 
-  // 开关副标题
-  if (!enabled) {
-    el.toggleHint.textContent = '点击开启本地代理';
-  } else if (online) {
-    el.toggleHint.textContent = `已指向 ${endpoint}`;
-  } else {
-    el.toggleHint.textContent = '桌面应用未运行，已临时切回直连';
-  }
+  // 信息行
+  el.server.textContent = formatProxy(config);
+  el.authText.textContent = config.authEnabled
+    ? config.username
+      ? `已启用（${config.username}）`
+      : '已启用（未填用户名）'
+    : '未启用';
+  el.proxyState.textContent = applied
+    ? `已启用 → ${config.host}:${config.port}`
+    : enabled && configured
+      ? '设置未生效'
+      : '未启用';
+  el.appliedAt.textContent = formatTime(state.appliedAt);
 
-  // 桌面应用在线状态
-  el.appLight.className = `light ${online ? 'light--on' : everChecked ? 'light--off' : 'light--unknown'}`;
-  if (online) {
-    el.appText.textContent = state.appVersion ? `运行中 · v${state.appVersion}` : '运行中';
-  } else {
-    el.appText.textContent = everChecked ? '未运行' : '检测中…';
-  }
-
-  // 其余信息行
-  el.endpoint.textContent = enabled ? endpoint : `${endpoint}（未启用）`;
-  el.proxyState.textContent = state.proxyApplied ? `已启用 → ${endpoint}` : enabled ? '已降级为直连' : '未启用';
-  el.checkedAt.textContent = formatTime(state.lastCheckedAt);
-
-  // 端口来源：让用户知道这个端口是自动跟随桌面应用得到的，还是自己在设置页填的
-  const autoFilled = config.portAutoFilled === true;
-  if (autoFilled && online) {
-    el.portSource.hidden = false;
-    el.portSource.textContent = '已自动跟随应用';
-    el.portSource.className = 'tag tag--auto';
-    el.portSource.title = '端口由插件自动探测得到，你在桌面应用里改了端口，这里会自动跟上';
-  } else if (autoFilled && !online) {
-    el.portSource.hidden = false;
-    el.portSource.textContent = '待确认';
-    el.portSource.className = 'tag tag--pending';
-    el.portSource.title = '上次自动探测到的端口，当前连接不上桌面应用';
-  } else {
-    el.portSource.hidden = true;
-    el.portSource.textContent = '';
-  }
-
-  // 提示条：错误优先，其次是降级提醒
+  // 提示条：错误优先，其次是未配置
   if (state.lastError) {
     showNotice(state.lastError, 'error');
-  } else if (enabled && !online) {
-    showNotice('桌面应用未运行，已自动切回直连以免断网。请先启动桌面应用，再点击「重新检测」。');
-  } else if (!online && state.probeError) {
-    showNotice(`检测失败：${state.probeError}`);
+  } else if (!configured) {
+    showNotice('还没有填写代理服务器，点击下方「打开设置」开始配置。');
+  } else if (enabled && config.authEnabled && config.scheme === 'socks5') {
+    showNotice('SOCKS5 的账号密码浏览器会在需要时弹出输入框，且可能记住它。建议改用 HTTP 代理以获得自动认证。');
   } else {
     showNotice('');
   }
 
-  // 忙碌时禁用交互
-  el.toggle.disabled = busy;
   el.refresh.disabled = busy;
 }
 
 /**
- * 向后台请求最新状态并重新探测桌面应用。
+ * 向后台请求最新状态并重新应用配置。
  * @returns {Promise<void>} 无返回值
  */
 async function refresh() {
@@ -159,9 +138,15 @@ async function refresh() {
  * @returns {Promise<void>} 无返回值
  */
 async function toggleEnabled() {
+  if (!isConfigured(config)) {
+    // 没配置就别开，直接把用户引到设置页
+    await chrome.runtime.openOptionsPage();
+    window.close();
+    return;
+  }
+
   const next = config.enabled !== true;
   busy = true;
-  // 乐观更新，让开关跟手，随后以后台返回的真实状态为准。
   config = { ...config, enabled: next };
   render();
 
@@ -178,10 +163,7 @@ async function toggleEnabled() {
   }
 }
 
-/**
- * 绑定界面事件。
- * @returns {void}
- */
+/** 绑定界面事件。 */
 function bindEvents() {
   el.toggle.addEventListener('click', () => {
     void toggleEnabled();
@@ -196,7 +178,7 @@ function bindEvents() {
     window.close();
   });
 
-  // 后台写入配置或状态后，弹窗自动跟随刷新。
+  // 后台写入配置或状态后，弹窗自动跟随刷新
   chrome.storage.onChanged.addListener((changes, areaName) => {
     let dirty = false;
 
@@ -216,10 +198,7 @@ function bindEvents() {
   });
 }
 
-/**
- * 初始化：先用缓存状态秒开，再触发一次真实探测。
- * @returns {Promise<void>} 无返回值
- */
+/** 初始化：先用缓存状态秒开，再触发一次真实同步。 */
 async function init() {
   bindEvents();
   render();
@@ -231,10 +210,7 @@ async function init() {
     render();
   } catch (error) {
     showNotice(`无法连接后台服务：${String(error?.message || error)}`, 'error');
-    return;
   }
-
-  await refresh();
 }
 
 void init();

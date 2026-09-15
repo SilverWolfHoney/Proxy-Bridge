@@ -1,24 +1,25 @@
 {
   "manifest_version": 3,
-  "name": "本地代理网关",
-  "version": "1.0.0",
-  "description": "把浏览器 HTTP/HTTPS 代理指向本机桌面应用提供的本地端口。插件不保存任何远程服务器地址与凭据。",
+  "name": "代理快速切换",
+  "version": "2.0.0",
+  "description": "把浏览器的 HTTP/HTTPS 代理设置指向你自己填写的代理服务器，支持账号密码认证、一键开关与域名绕过。本扩展与任何桌面应用无关。",
   "minimum_chrome_version": "116",
   "permissions": [
     "proxy",
     "storage",
-    "alarms"
+    "alarms",
+    "webRequest",
+    "webRequestAuthProvider"
   ],
   "host_permissions": [
-    "http://127.0.0.1/*",
-    "http://localhost/*"
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "src/background.js",
     "type": "module"
   },
   "action": {
-    "default_title": "本地代理网关",
+    "default_title": "代理快速切换",
     "default_popup": "src/popup.html"
   },
   "options_page": "src/options.html"

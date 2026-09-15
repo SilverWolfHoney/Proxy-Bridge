@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>本地代理网关</title>
+    <title>代理快速切换</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
@@ -12,14 +12,14 @@
         <div class="brand">
           <span class="brand__mark" aria-hidden="true"></span>
           <div class="brand__text">
-            <h1 class="brand__title">本地代理网关</h1>
-            <p class="brand__subtitle">流量经由桌面应用转发</p>
+            <h1 class="brand__title">代理快速切换</h1>
+            <p class="brand__subtitle">浏览器直连你的代理服务器</p>
           </div>
         </div>
         <span id="badge" class="badge badge--off">已关闭</span>
       </header>
 
-      <!-- 主开关：切换本地代理 -->
+      <!-- 主开关 -->
       <button
         id="toggle"
         class="toggle"
@@ -33,32 +33,26 @@
         </span>
         <span class="toggle__text">
           <strong id="toggleTitle" class="toggle__title">代理已关闭</strong>
-          <small id="toggleHint" class="toggle__hint">点击开启本地代理</small>
+          <small id="toggleHint" class="toggle__hint">点击开启代理</small>
         </span>
       </button>
 
-      <section class="rows" aria-label="运行状态">
+      <section class="rows" aria-label="代理信息">
         <div class="row">
-          <span class="row__label">桌面应用</span>
-          <span class="row__value">
-            <span id="appLight" class="light light--unknown" aria-hidden="true"></span>
-            <span id="appText">检测中…</span>
-          </span>
+          <span class="row__label">代理服务器</span>
+          <span id="server" class="row__value row__value--mono">未配置</span>
         </div>
-        <div class="row" title="端口会自动跟随桌面应用，无需两边各填一次">
-          <span class="row__label">本地代理地址</span>
-          <span class="row__value">
-            <span id="endpoint" class="row__value--mono">127.0.0.1:7890</span>
-            <span id="portSource" class="tag" hidden></span>
-          </span>
+        <div class="row">
+          <span class="row__label">认证</span>
+          <span id="authText" class="row__value">未启用</span>
         </div>
         <div class="row">
           <span class="row__label">代理状态</span>
           <span id="proxyState" class="row__value">未启用</span>
         </div>
         <div class="row">
-          <span class="row__label">最近检测</span>
-          <span id="checkedAt" class="row__value row__value--muted">—</span>
+          <span class="row__label">最近应用</span>
+          <span id="appliedAt" class="row__value row__value--muted">—</span>
         </div>
       </section>
 
@@ -66,7 +60,7 @@
 
       <footer class="footer">
         <button id="openOptions" class="btn btn--primary" type="button">打开设置</button>
-        <button id="refresh" class="btn" type="button">重新检测</button>
+        <button id="refresh" class="btn" type="button">重新应用</button>
       </footer>
     </main>
 

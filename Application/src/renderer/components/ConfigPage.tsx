@@ -300,7 +300,8 @@ export function ConfigPage(props: ConfigPageProps): JSX.Element {
         </label>
         <p className="field-hint" style={{ marginTop: 10, marginBottom: 0 }}>
           开启后会写入系统代理设置，关闭开关或退出应用时自动还原成你原来的设置。
-          只影响读取系统代理的程序；浏览器推荐用插件，可以随时开关且不动系统设置。
+          只影响读取系统代理的程序。如果只想让浏览器走代理，用仓库里的浏览器插件更轻量——
+          它是独立的客户端，不需要本应用运行。
         </p>
       </div>
     </div>
