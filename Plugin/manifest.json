@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "本地代理网关",
+  "version": "1.0.0",
+  "description": "把浏览器 HTTP/HTTPS 代理指向本机桌面应用提供的本地端口。插件不保存任何远程服务器地址与凭据。",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "proxy",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "本地代理网关",
+    "default_popup": "src/popup.html"
+  },
+  "options_page": "src/options.html"
+}

@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>本地代理网关</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="panel">
+      <header class="header">
+        <div class="brand">
+          <span class="brand__mark" aria-hidden="true"></span>
+          <div class="brand__text">
+            <h1 class="brand__title">本地代理网关</h1>
+            <p class="brand__subtitle">流量经由桌面应用转发</p>
+          </div>
+        </div>
+        <span id="badge" class="badge badge--off">已关闭</span>
+      </header>
+
+      <!-- 主开关：切换本地代理 -->
+      <button
+        id="toggle"
+        class="toggle"
+        type="button"
+        role="switch"
+        aria-checked="false"
+        aria-labelledby="toggleTitle"
+      >
+        <span class="toggle__track" aria-hidden="true">
+          <span class="toggle__thumb"></span>
+        </span>
+        <span class="toggle__text">
+          <strong id="toggleTitle" class="toggle__title">代理已关闭</strong>
+          <small id="toggleHint" class="toggle__hint">点击开启本地代理</small>
+        </span>
+      </button>
+
+      <section class="rows" aria-label="运行状态">
+        <div class="row">
+          <span class="row__label">桌面应用</span>
+          <span class="row__value">
+            <span id="appLight" class="light light--unknown" aria-hidden="true"></span>
+            <span id="appText">检测中…</span>
+          </span>
+        </div>
+        <div class="row">
+          <span class="row__label">本地代理地址</span>
+          <span id="endpoint" class="row__value row__value--mono">127.0.0.1:7890</span>
+        </div>
+        <div class="row">
+          <span class="row__label">代理状态</span>
+          <span id="proxyState" class="row__value">未启用</span>
+        </div>
+        <div class="row">
+          <span class="row__label">最近检测</span>
+          <span id="checkedAt" class="row__value row__value--muted">—</span>
+        </div>
+      </section>
+
+      <p id="notice" class="notice" hidden></p>
+
+      <footer class="footer">
+        <button id="openOptions" class="btn btn--primary" type="button">打开设置</button>
+        <button id="refresh" class="btn" type="button">重新检测</button>
+      </footer>
+    </main>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

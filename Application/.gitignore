@@ -1,0 +1,13 @@
+node_modules/
+dist/
+dist-electron/
+tests-dist/
+*.log
+.DS_Store
+Thumbs.db
+
+# 本地配置绝不入库：里面可能有你自己的服务器信息
+config.json
+*.local.json
+.env
+.env.*
