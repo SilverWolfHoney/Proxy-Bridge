@@ -252,7 +252,6 @@ export function HomePage(props: HomePageProps): JSX.Element {
                 {testResult.ok ? (
                   <>
                     出口 IP：<span className="code-inline">{testResult.exitIp ?? '未取到'}</span>
-                    {testResult.exitIp && ' —— 目标网站看到的就是这个地址'}
                   </>
                 ) : (
                   testResult.error
