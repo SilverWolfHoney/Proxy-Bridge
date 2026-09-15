@@ -24,14 +24,17 @@ export interface UpstreamConfig {
   timeoutMs: number;
 }
 
-/** 本机网关配置：浏览器插件/系统代理指向这里 */
+/**
+ * 本机转发端口配置。
+ *
+ * Windows 的系统代理只能指向本机地址，所以全局代理必须经由这个端口转发。
+ * 它是实现细节，界面上收在「高级设置」里。
+ */
 export interface BridgeConfig {
   /** 监听地址，出于安全考虑默认只监听回环 */
   host: string;
-  /** 监听端口，插件需要填写同一个值 */
+  /** 监听端口，系统代理会指向它 */
   port: number;
-  /** 是否在启动应用时自动开启网关 */
-  autoStart: boolean;
 }
 
 /** 域名分流规则 */
@@ -197,7 +200,6 @@ export const DEFAULT_CONFIG: AppConfig = {
   bridge: {
     host: '127.0.0.1',
     port: 7890,
-    autoStart: false,
   },
   rules: {
     direct: ['localhost', '127.0.0.1', '::1', '*.local', '10.*', '192.168.*'],

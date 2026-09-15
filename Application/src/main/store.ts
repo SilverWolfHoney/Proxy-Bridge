@@ -133,7 +133,6 @@ export class ConfigStore {
       const raw = patch.bridge as DeepPartial<AppConfig['bridge']>;
       if (typeof raw.host === 'string' && raw.host.trim()) next.bridge.host = raw.host.trim();
       if (raw.port !== undefined) next.bridge.port = clampPort(raw.port, next.bridge.port);
-      if (typeof raw.autoStart === 'boolean') next.bridge.autoStart = raw.autoStart;
     }
 
     if (isPlainObject(patch.rules)) {
@@ -187,7 +186,6 @@ export class ConfigStore {
         const br = stored.bridge as Partial<AppConfig['bridge']>;
         if (typeof br.host === 'string' && br.host.trim()) base.bridge.host = br.host.trim();
         if (br.port !== undefined) base.bridge.port = clampPort(br.port, base.bridge.port);
-        if (typeof br.autoStart === 'boolean') base.bridge.autoStart = br.autoStart;
       }
 
       if (isPlainObject(stored.rules)) {
