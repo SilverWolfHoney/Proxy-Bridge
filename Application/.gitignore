@@ -2,12 +2,19 @@ node_modules/
 dist/
 dist-electron/
 tests-dist/
+build/
+out/
 *.log
+*.tmp
 .DS_Store
 Thumbs.db
+.vscode/
+.idea/
 
-# 本地配置绝不入库：里面可能有你自己的服务器信息
+# 本地配置绝不入库：里面可能有你自己的服务器信息与凭据
 config.json
 *.local.json
 .env
 .env.*
+*.pem
+*.key
