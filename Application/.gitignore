@@ -15,8 +15,7 @@ Thumbs.db
 # 图标不入库：本地生成，换图后跑 npm run icon 即可
 resources/app.ico
 resources/app.png
-resources/tray-off-32.png
-resources/tray-on-32.png
+resources/tray-32.png
 
 # 打包配置不入库
 electron-builder.yml

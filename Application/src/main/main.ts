@@ -117,15 +117,19 @@ function showMainWindow(): void {
   mainWindow.focus();
 }
 
-/** 按当前状态刷新托盘图标与菜单 */
+/**
+ * 刷新托盘的提示与菜单。
+ *
+ * 图标本身不随状态变化：曾经用「已开启时整体偏绿」来区分状态，
+ * 结果把角色的白色衣服、米色细节一起染绿了，很难看。
+ * 状态改由悬停提示与右键菜单呈现，图标保持原色。
+ */
 function refreshTray(): void {
   if (!tray || tray.isDestroyed()) return;
 
   const state = currentGlobalState();
   const detail = state.enabled ? `已开启（${state.listen ?? '启动中'}）` : '未开启';
 
-  const icon = loadTrayIcon(state.enabled ? 'tray-on-32.png' : 'tray-off-32.png');
-  if (!icon.isEmpty()) tray.setImage(icon);
   tray.setToolTip(`Proxy Bridge · 全局代理${detail}`);
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -154,7 +158,7 @@ function refreshTray(): void {
 function createTray(): void {
   if (tray) return;
 
-  const image = loadTrayIcon('tray-off-32.png');
+  const image = loadTrayIcon('tray-32.png');
   if (image.isEmpty()) {
     console.error('[tray] 托盘图标读取失败，托盘将不可用');
     return;

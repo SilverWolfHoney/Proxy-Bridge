@@ -12,10 +12,9 @@
  * 细节太多的图缩下去会糊成色块；简化版在小尺寸下辨识度高得多。
  *
  * 产物写到 Application/resources/：
- *   app.ico          多尺寸 ICO（16/32/48/64/128/256），exe 与安装包用
- *   app.png          256 尺寸，窗口图标用
- *   tray-off-32.png  托盘图标：未开启
- *   tray-on-32.png   托盘图标：已开启（整体偏绿）
+ *   app.ico     多尺寸 ICO（16/32/48/64/128/256），exe 与安装包用
+ *   app.png     256 尺寸，窗口图标用
+ *   tray-32.png 托盘图标（开关两种状态共用同一张，不随状态变色）
  */
 
 import fs from 'node:fs';
@@ -176,27 +175,28 @@ app.whenReady().then(() => {
 
   // 固定出 32px：Windows 会按 DPI 自行缩放，比从 16px 放大清晰
   const TRAY = 32;
-  const base = resize(small.data, small.width, small.height, TRAY, TRAY);
-  fs.writeFileSync(path.join(OUT_DIR, 'tray-off-32.png'), toImage(base, TRAY, TRAY).toPNG());
-  console.log('  → tray-off-32.png');
+  const tray = resize(small.data, small.width, small.height, TRAY, TRAY);
 
-  // 已开启：整体偏绿提亮，作为状态提示
-  const on = Buffer.from(base);
-  for (let i = 0; i < on.length; i += 4) {
-    if (on[i + 3] === 0) continue;
-    on[i] = Math.round(on[i] * 0.75);
-    on[i + 1] = Math.min(255, Math.round(on[i + 1] * 1.1 + 20));
-    on[i + 2] = Math.round(on[i + 2] * 0.85);
-  }
-  fs.writeFileSync(path.join(OUT_DIR, 'tray-on-32.png'), toImage(on, TRAY, TRAY).toPNG());
-  console.log('  → tray-on-32.png');
+  // 只出一张图，开启与关闭共用。
+  // 曾经给「已开启」加过一层整体偏绿滤镜做状态区分，结果把角色的白色衣服、
+  // 米色细节一起染绿了；角色本来就是绿发，再叠绿既没区分度又丢细节。
+  // 开关状态改由悬停提示和弹窗呈现，图标保持原色。
+  fs.writeFileSync(path.join(OUT_DIR, 'tray-32.png'), toImage(tray, TRAY, TRAY).toPNG());
+  console.log('  → tray-32.png');
 
-  // 旧的箭头图标已不再使用，顺手清掉，避免打包进去
-  for (const stale of ['tray-off.png', 'tray-on.png', 'icon.ico', 'icon.png']) {
+  // 清掉不再使用或已被取代的图标，避免打包进去
+  for (const stale of [
+    'tray-off.png',
+    'tray-on.png',
+    'tray-off-32.png',
+    'tray-on-32.png',
+    'icon.ico',
+    'icon.png',
+  ]) {
     const p = path.join(OUT_DIR, stale);
     if (fs.existsSync(p)) {
       fs.unlinkSync(p);
-      console.log(`  → 已移除不再使用的 ${stale}`);
+      console.log(`  → 已移除 ${stale}`);
     }
   }
 
