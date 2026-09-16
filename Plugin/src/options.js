@@ -23,6 +23,7 @@ const el = {
   authFields: document.getElementById('authFields'),
   username: document.getElementById('username'),
   password: document.getElementById('password'),
+  passwordState: document.getElementById('passwordState'),
   togglePassword: document.getElementById('togglePassword'),
   bypassList: document.getElementById('bypassList'),
   rememberPassword: document.getElementById('rememberPassword'),
@@ -80,8 +81,18 @@ function render() {
 
   el.authEnabled.checked = config.authEnabled === true;
   el.username.value = config.username;
-  // 选择不记住密码时存储里没有密码，需要用户重新输入
-  el.password.value = config.password;
+
+  // 密码框永远从空白开始：已保存的密码不回填到界面上，
+  // 这样即使有人看到屏幕也看不到密码。想改就重新输入，不改就留空沿用。
+  el.password.value = '';
+  el.password.placeholder = config.hasPassword ? '已保存（留空表示不修改）' : '请输入密码';
+  // 顺带复位「显示/隐藏」，免得下次输入时是明文状态
+  el.password.type = 'password';
+  el.togglePassword.textContent = '显示';
+  el.passwordState.textContent = config.hasPassword
+    ? '✓ 已保存在本机（不回显）'
+    : '尚未保存密码';
+  el.passwordState.className = config.hasPassword ? 'field__hint field__hint--ok' : 'field__hint';
   passwordTouched = false;
 
   el.bypassList.value = config.bypassList.join('\n');
@@ -126,6 +137,10 @@ function readForm() {
     return { ok: false, error: '已启用认证，请填写用户名', focus: el.username };
   }
 
+  /** 用户没动过密码框就传 undefined，表示「沿用已保存的密码」；
+   *  动过则按新输入处理（清空输入框 + 保存 = 清除密码）。 */
+  const passwordPatch = passwordTouched ? { password: el.password.value } : {};
+
   return {
     ok: true,
     value: {
@@ -134,8 +149,7 @@ function readForm() {
       port: Number.parseInt(portText, 10),
       authEnabled,
       username: el.username.value,
-      // 用户没动过密码框就沿用已保存的密码，避免「保存一次就把密码清空」
-      password: passwordTouched ? el.password.value : config.password,
+      ...passwordPatch,
       rememberPassword: el.rememberPassword.checked === true,
       bypassList: el.bypassList.value
         .split(/\r?\n/)

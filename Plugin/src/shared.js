@@ -181,6 +181,19 @@ export function normalizeConfig(raw) {
   const scheme = isValidScheme(source.scheme) ? String(source.scheme) : DEFAULT_CONFIG.scheme;
   const rememberPassword = source.rememberPassword !== false;
 
+  /**
+   * 密码是否已经保存过。
+   *
+   * 已保存的密码**不回填到界面**：界面上密码框永远从空白开始，
+   * 想改就重新输入，不改就留空沿用已保存的那个。
+   * 这样即使有人看到屏幕，也看不到密码。
+   */
+  const hasPassword = source.hasPassword === true;
+
+  // 不记住、或已被清空时，读取一律返回空串
+  const password =
+    rememberPassword && hasPassword && typeof source.password === 'string' ? source.password : '';
+
   return {
     enabled: source.enabled === true,
     scheme,
@@ -188,8 +201,8 @@ export function normalizeConfig(raw) {
     port: normalizePort(source.port, DEFAULT_CONFIG.port),
     authEnabled: source.authEnabled === true,
     username: String(source.username ?? ''),
-    // 选择不记住密码时不落盘：读取时始终返回空串，需要用户在界面重新输入
-    password: rememberPassword ? String(source.password ?? '') : '',
+    password,
+    hasPassword,
     rememberPassword,
     bypassList,
   };
@@ -235,11 +248,22 @@ export async function readConfig() {
 
 /**
  * 写入配置（局部更新，自动规范化）。
+ *
+ * 密码字段的语义：undefined = 保持已保存的密码不变，空串 = 清空，其他 = 覆盖。
+ * 因此 hasPassword 会随之更新，界面据此显示「已保存（留空表示不修改）」。
+ *
  * @param {object} patch 需要更新的字段
  * @returns {Promise<object>} 写入后的完整配置
  */
 export async function writeConfig(patch) {
-  const merged = normalizeConfig({ ...(await readConfig()), ...(patch || {}) });
+  const previous = await readConfig();
+  const raw = { ...previous, ...(patch || {}) };
+
+  // 补丁里没提 password 就沿用已保存的；提了就按新值判断是否还存有密码
+  const password = typeof patch?.password === 'string' ? patch.password : previous.password;
+  const hasPassword = password.length > 0;
+
+  const merged = normalizeConfig({ ...raw, password, hasPassword });
   await chrome.storage.local.set({ [STORAGE_KEYS.config]: merged });
   return merged;
 }

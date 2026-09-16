@@ -185,6 +185,11 @@ body {
   line-height: 1.5;
 }
 
+/* 密码已保存时的提示用成功色，明确告诉用户「存住了」 */
+.field__hint--ok {
+  color: var(--ok);
+}
+
 .field__row {
   display: flex;
   gap: 8px;

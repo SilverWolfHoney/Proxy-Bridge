@@ -111,12 +111,19 @@
                   type="password"
                   autocomplete="new-password"
                   spellcheck="false"
-                  placeholder="区分大小写"
+                  placeholder="请输入密码"
                 />
                 <button id="togglePassword" class="btn btn--ghost" type="button">显示</button>
               </div>
+              <span id="passwordState" class="field__hint"></span>
             </div>
           </div>
+
+          <p class="card__note">
+            已保存的密码<strong>不会</strong>回填到这个输入框，它始终从空白开始——即使有人看到屏幕也看不到密码。
+            想更换就重新输入并保存；不改就留空，会继续沿用已保存的那个。
+            清空输入框后保存即可删除密码。
+          </p>
         </section>
 
         <!-- 绕过列表 -->
