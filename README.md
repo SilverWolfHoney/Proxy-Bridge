@@ -101,7 +101,7 @@ npm run dev         # 开发模式：Vite + Electron，界面热更新
 npm run typecheck   # 类型检查（主进程 + 界面）
 npm test            # 单元测试 + 端到端测试（全部使用本机模拟服务，不联网）
 npm run build       # 只构建，不启动
-npm run dist        # 打包成 exe（安装程序 + 免安装版，产物在 release/）
+npm run dist        # 打包成 exe（产物在项目根目录的 release/）
 ```
 
 浏览器扩展是纯原生 JS/HTML/CSS，无依赖、无构建步骤，改完在 `chrome://extensions` 里点一下刷新即可。

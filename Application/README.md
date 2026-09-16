@@ -191,7 +191,7 @@ npm run dist:dir    # 只出免安装目录（快，用于验证）
 npm run icon        # 只重新生成图标
 ```
 
-产物在 `release/`：
+产物在**项目根目录**的 `release/`（即 `Proxy/release/`）：
 
 | 文件 | 说明 |
 | --- | --- |
@@ -199,8 +199,7 @@ npm run icon        # 只重新生成图标
 | `Proxy Bridge 0.1.0.exe` | 免安装版，双击直接运行 |
 | `win-unpacked/` | 解压后的完整目录，方便排查问题 |
 
-`release/` 不入库（体积大且可随时重新生成）。
-
+产物不入库（体积大且可随时重新生成）。
 ### 打包时为什么走镜像
 
 electron-builder 除了 npm 包，还要另外下载一份 Electron 二进制和 NSIS 等工具，

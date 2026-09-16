@@ -4,8 +4,7 @@ dist-electron/
 tests-dist/
 build/
 out/
-# 打包产物：体积大且可随时重新生成
-release/
+# 打包产物不在这里：electron-builder 输出到项目根目录的 release/
 *.log
 *.tmp
 .DS_Store
