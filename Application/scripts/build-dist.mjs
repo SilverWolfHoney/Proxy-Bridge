@@ -10,6 +10,7 @@
  *   node scripts/build-dist.mjs --dir      只产出免安装目录（快，用于验证）
  */
 
+import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,4 +45,30 @@ if (result.status !== 0) {
   process.exit(result.status ?? 1);
 }
 
-console.log('\n打包完成，产物在 release/ 目录。');
+/* 收尾：清掉 .blockmap
+ *
+ * 那是自动更新做增量下载用的索引，本项目不发布更新（publish 为 null），
+ * 留着没意义。配置里已经用 differentialPackage: false 关掉了生成，
+ * 这里再扫一遍兜底：万一某个版本的 electron-builder 仍然产出，
+ * 也不至于让它留在交付目录里让人困惑。 */
+const outputDir = path.resolve(ROOT, '..', 'release');
+const removed = [];
+if (fs.existsSync(outputDir)) {
+  for (const name of fs.readdirSync(outputDir)) {
+    if (name.endsWith('.blockmap')) {
+      fs.rmSync(path.join(outputDir, name), { force: true });
+      removed.push(name);
+    }
+  }
+}
+
+console.log('\n打包完成，产物在项目根目录的 release/：');
+for (const name of fs.readdirSync(outputDir)) {
+  const full = path.join(outputDir, name);
+  const isDir = fs.statSync(full).isDirectory();
+  const size = isDir ? '' : `${(fs.statSync(full).size / 1024 / 1024).toFixed(1)} MB`;
+  console.log(`  ${name}${isDir ? '/' : ''}  ${size}`);
+}
+if (removed.length > 0) {
+  console.log(`\n已清理无用的更新索引：${removed.join(', ')}`);
+}
