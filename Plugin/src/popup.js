@@ -80,7 +80,13 @@ function resolveConnectionView() {
   }
 
   if (state.connection === 'connecting') {
-    return { kind: 'connecting', title: '正在连接…', hint: `经 ${config.host}:${config.port} 验证中` };
+    // 首次检测安排在第 60 秒，所以这里如实说明「稍后会自动验证」，
+    // 而不是让用户盯着一个「正在连接…」以为它卡住了
+    return {
+      kind: 'connecting',
+      title: '已开启，等待检测',
+      hint: state.lastProbeAt ? '正在验证…' : '约 1 分钟后自动验证连通性',
+    };
   }
 
   if (state.connection === 'connected') {
@@ -92,16 +98,18 @@ function resolveConnectionView() {
   }
 
   if (state.connection === 'failed') {
-    const attempts = state.probeFailures ?? 0;
+    const done = state.probeFailures ?? 0;
+    // 自动检测共 5 次（第 60、90、120、150、180 秒），用完就停
+    const canRetry = done > 0 && done < 5;
     return {
       kind: 'failed',
       title: '连不上服务器',
-      hint: attempts > 1 ? `已重试 ${attempts - 1} 次，仍在自动重试` : '正在重试…',
+      hint: canRetry ? `已检测 ${done} 次，30 秒后自动重试` : `已自动检测 ${done} 次仍未连通，可点「重新检测」`,
     };
   }
 
-  // unknown：刚开启、后台还没测出结果
-  return { kind: 'connecting', title: '正在连接…', hint: `将要经 ${config.host}:${config.port} 出网` };
+  // unknown：刚开启、后台还没开始检测
+  return { kind: 'connecting', title: '已开启，等待检测', hint: '约 1 分钟后自动验证连通性' };
 }
 
 /** 刷新整个界面。 */

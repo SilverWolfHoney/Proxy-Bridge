@@ -11,7 +11,7 @@
  *   3. HTTP/HTTPS 代理需要认证时，用 webRequest.onAuthRequired 自动提供凭据，
  *      用户不会看到浏览器弹出的账号密码框
  *   4. 开启后立刻探测一次「经代理能否出网」，并据此显示「已连接」而不是「已开启」；
- *      失败则按 30/60/90/120 秒重试，累计 5 分钟仍不通就停止并如实上报
+ *      失败则先等 60 秒、之后每 30 秒重试一次，共 5 次，用完就停止并如实上报
  *
  * MV3 注意事项：Service Worker 会被随时休眠，模块顶层不保存任何持久状态，
  * 所有状态都从 chrome.storage 读取；本文件中的变量仅用于「本次唤醒期间」的流程编排。
@@ -34,7 +34,9 @@ import {
 const BADGE = Object.freeze({
   on: { text: 'ON', color: '#22c55e', title: '代理已开启，连接正常' },
   off: { text: '', color: '#64748b', title: '代理已关闭（点击开启）' },
-  /** 代理已写入浏览器，但经它出不去（探测失败） */
+  /** 已开启、正在等待或进行连通性检测 */
+  pending: { text: '…', color: '#38bdf8', title: '代理已开启，正在检测连接' },
+  /** 已开启，但经它出不去（检测失败） */
   probeFailed: { text: '!', color: '#f59e0b', title: '代理已开启，但连不上服务器（点击查看）' },
   /** 代理设置本身就没写成功 */
   error: { text: '!', color: '#ef4444', title: '代理设置失败，点击查看' },
@@ -157,32 +159,29 @@ async function probeConnectivity() {
 /** 当前的探测代次：开启/关闭时递增，用来丢弃过期的探测结果 */
 let probeEpoch = 0;
 
+/** 本轮开启后最多自动检测几次 */
+const MAX_PROBES = 5;
+
 /**
- * 计算失败后的重试安排。
+ * 计算某次检测失败后的下一步安排。
  *
- * 纯函数，便于直接验证时序。
- * 开启时先测一次（第 0 秒），失败后依次等待 30 / 60 / 90 / 120 秒再测，
- * 也就是最坏情况下共探测 5 次（第 0、30、90、180、300 秒），累计正好 5 分钟，
- * 之后停止自动重试。
+ * 纯函数，便于直接验证时序。首次检测由 scheduleProbe 安排在第 60 秒，
+ * 之后每次失败隔 30 秒再试，共 5 次（第 60、90、120、150、180 秒），用完即停。
  *
- * @param {number} failures 连续失败次数（从 1 开始）
- * @returns {{nextDelayMs: number, giveUp: boolean, waitedSec: number}} 重试安排
+ * @param {number} done 已完成的检测次数
+ * @returns {{nextDelayMs: number, giveUp: boolean}} 下一步安排
  */
-export function computeRetrySchedule(failures) {
-  const { retryDelaysSec } = PROBE;
-  // 第 n 次失败后等 retryDelaysSec[n-1]；超出档位说明 5 分钟已到，停止
-  const giveUp = failures > retryDelaysSec.length;
-  const nextDelaySec = giveUp ? 0 : retryDelaysSec[failures - 1];
-  const waitedSec = retryDelaysSec.slice(0, Math.min(failures, retryDelaysSec.length)).reduce((sum, s) => sum + s, 0);
-  return { nextDelayMs: nextDelaySec * 1000, giveUp, waitedSec };
+export function computeRetrySchedule(done) {
+  if (done >= MAX_PROBES) return { nextDelayMs: 0, giveUp: true };
+  return { nextDelayMs: PROBE.retryIntervalSec * 1000, giveUp: false };
 }
 
 /**
  * 探测一次并更新状态，然后安排下一次探测。
  *
- * 成功 -> 60 秒后再确认一次
- * 失败 -> 按 30/60/90/120 秒重试；累计到 5 分钟就停止，
- *         把状态定为「服务器无响应」，等用户手动重新检测
+ * 成功 -> 60 秒后再确认一次（心跳）
+ * 失败 -> 30 秒后再试，最多自动检测 5 次；用完就停止并如实上报，
+ *         等用户手动点「重新检测」
  * @param {number} epoch 发起时的代次
  */
 async function runProbe(epoch) {
@@ -217,15 +216,15 @@ async function runProbe(epoch) {
     return;
   }
 
-  const failures = (previous.probeFailures ?? 0) + 1;
-  const retry = computeRetrySchedule(failures);
+  const done = (previous.probeFailures ?? 0) + 1;
+  const retry = computeRetrySchedule(done);
 
   await writeState({
     connection: 'failed',
     exitIp: '',
-    probeFailures: failures,
+    probeFailures: done,
     probeError: retry.giveUp
-      ? `${result.error}（已重试 ${failures - 1} 次、累计约 ${Math.round(retry.waitedSec / 60)} 分钟，暂停自动重试；可点「重新检测」）`
+      ? `${result.error}（已自动检测 ${done} 次仍未连通，暂停重试；可点「重新检测」再试）`
       : result.error,
     lastProbeAt: Date.now(),
   });
@@ -250,9 +249,17 @@ function scheduleNextProbe(delayMs, epoch) {
 
 /**
  * 按当前配置决定是否启动探测。
- * 开启时立刻测一次；关闭时取消计时器并把状态清干净。
+ *
+ * 首次检测默认推迟到第 60 秒：刚开启时浏览器往往还在建立连接，
+ * 立刻测没有意义，只会白耗流量。
+ *
+ * 但**用户主动触发**（点开关、点「重新检测」）时应当立即检查 —— 那时他正等着看结果，
+ * 再让他等一分钟是说不通的。这种场景传 `immediate: true`。
+ *
+ * @param {object} config 当前配置
+ * @param {{immediate?: boolean}} [options] 选项
  */
-async function scheduleProbe(config) {
+async function scheduleProbe(config, { immediate = false } = {}) {
   probeEpoch += 1;
   const epoch = probeEpoch;
 
@@ -263,10 +270,24 @@ async function scheduleProbe(config) {
 
   if (config.enabled !== true || !isConfigured(config)) {
     await writeState({ connection: 'unknown', exitIp: '', probeFailures: 0, probeError: '' });
+    await updateBadge('off', config);
     return;
   }
 
-  void runProbe(epoch);
+  await writeState({
+    connection: 'connecting',
+    probeFailures: 0,
+    probeError: '',
+    exitIp: '',
+    lastProbeAt: 0,
+  });
+  await updateBadge('pending', config);
+
+  if (immediate) {
+    void runProbe(epoch);
+    return;
+  }
+  scheduleNextProbe(PROBE.initialDelaySec * 1000, epoch);
 }
 
 /**
@@ -274,7 +295,13 @@ async function scheduleProbe(config) {
  * @param {{reason?: string}} [options] 选项
  * @returns {Promise<{config: object, state: object}>} 同步结果
  */
-async function syncProxy({ reason = 'sync' } = {}) {
+/**
+ * 核心同步流程：读配置 -> 应用代理 -> 写状态 -> 更新徽章 -> 安排探测。
+ * @param {{reason?: string, immediate?: boolean}} [options] 选项；
+ *        immediate 表示这是用户主动操作，探测应立即开始而不等首次延迟
+ * @returns {Promise<{config: object, state: object}>} 同步结果
+ */
+async function syncProxy({ reason = 'sync', immediate = false } = {}) {
   const config = await readConfig();
   const applied = await applyProxySettings(config);
 
@@ -285,10 +312,17 @@ async function syncProxy({ reason = 'sync' } = {}) {
     lastReason: reason,
   });
 
-  await updateBadge(applied.lastError ? 'error' : applied.proxyApplied ? 'on' : 'off', config);
+  // 代理设置本身失败才用红色徽章；设置成功但连通性未知时，
+  // 徽章交给探测流程决定（等待检测显示「…」，成功显示 ON，失败显示橙色 !），
+  // 避免「刚开启就显示已连接」这种不诚实的反馈。
+  if (applied.lastError) {
+    await updateBadge('error', config);
+  } else if (!applied.proxyApplied) {
+    await updateBadge('off', config);
+  }
 
   // 配置变了或刚被唤醒：按需重新开始探测（内部会按开关状态决定测不测）
-  await scheduleProbe(config);
+  await scheduleProbe(config, { immediate });
 
   return { config, state };
 }
@@ -321,13 +355,14 @@ async function handleMessage(message) {
 
     case 'setEnabled': {
       await writeConfig({ enabled: message.enabled === true });
-      const synced = await queueSync({ reason: 'message:setEnabled' });
+      // 用户点了开关，正等着看结果，立即检测
+      const synced = await queueSync({ reason: 'message:setEnabled', immediate: true });
       return { ok: true, config: synced.config, state: synced.state };
     }
 
     case 'refresh': {
-      // 重新把配置应用到浏览器，用于「重新应用」按钮
-      const synced = await queueSync({ reason: 'message:refresh' });
+      // 用户点「重新检测」，立即测一次
+      const synced = await queueSync({ reason: 'message:refresh', immediate: true });
       return { ok: true, config: synced.config, state: synced.state };
     }
 
