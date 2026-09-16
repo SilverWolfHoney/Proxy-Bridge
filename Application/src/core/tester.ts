@@ -9,8 +9,8 @@
  */
 
 import net from 'node:net';
-import { connectThroughUpstream, type UpstreamError } from './connector';
-import type { TestResult, UpstreamConfig } from '../shared/types';
+import { AUTO_PROTOCOL_ORDER, connectThroughUpstream, type UpstreamError } from './connector';
+import type { ProtocolAttempt, TestResult, UpstreamConfig, UpstreamProtocol } from '../shared/types';
 
 /** 用于验证隧道能否建立的目标（HTTPS，端口固定，不涉及用户隐私） */
 const TUNNEL_TARGET = { host: 'www.gstatic.com', port: 443, label: 'www.gstatic.com:443' };
@@ -116,8 +116,11 @@ function httpGetOverTunnel(
 }
 
 /** 通过代理取出口 IP；失败返回 null（不影响主流程判定） */
-async function fetchExitIp(cfg: UpstreamConfig): Promise<string | null> {
-  for (const endpoint of IP_ENDPOINTS) {
+async function fetchExitIp(
+  cfg: UpstreamConfig,
+  endpoints: { host: string; port: number; path: string }[] = IP_ENDPOINTS,
+): Promise<string | null> {
+  for (const endpoint of endpoints) {
     let socket: net.Socket | null = null;
     try {
       const tunnel = await connectThroughUpstream(cfg, endpoint.host, endpoint.port);
@@ -146,39 +149,47 @@ async function fetchExitIp(cfg: UpstreamConfig): Promise<string | null> {
   return null;
 }
 
+/**
+ * 测试参数。
+ *
+ * 默认针对公网目标；测试里可以注入本机 mock 目标与空的出口 IP 端点，
+ * 这样协议识别逻辑就能完全离线验证，不受网络环境影响。
+ */
+export interface TestOptions {
+  targets?: { host: string; port: number }[];
+  ipEndpoints?: { host: string; port: number; path: string }[];
+}
+
+const DEFAULT_TARGETS = [TUNNEL_TARGET, TUNNEL_FALLBACK];
+
 /** 通过上游代理建立一次隧道，成功即说明协议与凭据都可用 */
-async function probeTunnel(cfg: UpstreamConfig, target: typeof TUNNEL_TARGET): Promise<number> {
+async function probeTunnel(
+  cfg: UpstreamConfig,
+  target: { host: string; port: number },
+  protocol: UpstreamProtocol,
+): Promise<number> {
   const started = Date.now();
-  const tunnel = await connectThroughUpstream(cfg, target.host, target.port);
+  const tunnel = await connectThroughUpstream(cfg, target.host, target.port, protocol);
   const latency = Date.now() - started;
   tunnel.socket.destroy();
   return latency;
 }
 
 /**
- * 测试上游代理是否可用。
- * @param cfg 完整的上游配置（含明文密码，仅主进程内调用）
+ * 在指定协议下完整测一次：先建隧道，再取出口 IP。
+ * @returns 成功时返回延迟与出口 IP；失败时返回原因
  */
-export async function testUpstream(cfg: UpstreamConfig): Promise<TestResult> {
-  const base: TestResult = {
-    ok: false,
-    protocol: cfg.protocol,
-    latencyMs: null,
-    exitIp: null,
-    error: null,
-    detail: '',
-  };
-
-  if (!cfg.host || !cfg.port) {
-    return { ...base, error: '尚未填写服务器地址或端口', detail: explainError({ code: 'ENOCONFIG' } as UpstreamError, cfg) };
-  }
-
+async function tryProtocol(
+  cfg: UpstreamConfig,
+  protocol: UpstreamProtocol,
+  options: TestOptions,
+): Promise<{ ok: boolean; latencyMs: number | null; exitIp: string | null; error: string | null }> {
   let latency: number | null = null;
   let lastError: unknown = null;
 
-  for (const target of [TUNNEL_TARGET, TUNNEL_FALLBACK]) {
+  for (const target of options.targets ?? DEFAULT_TARGETS) {
     try {
-      latency = await probeTunnel(cfg, target);
+      latency = await probeTunnel(cfg, target, protocol);
       lastError = null;
       break;
     } catch (err) {
@@ -187,21 +198,86 @@ export async function testUpstream(cfg: UpstreamConfig): Promise<TestResult> {
   }
 
   if (lastError !== null) {
-    return { ...base, error: explainError(lastError, cfg), detail: '隧道未能建立' };
+    return { ok: false, latencyMs: null, exitIp: null, error: explainError(lastError, cfg) };
   }
 
-  const exitIp = await fetchExitIp(cfg);
-  const protocolLabel =
-    cfg.protocol === 'socks5' ? 'SOCKS5' : cfg.protocol === 'https' ? 'HTTPS 代理' : 'HTTP 代理';
+  const exitIp = await fetchExitIp({ ...cfg, protocol }, options.ipEndpoints);
+  return { ok: true, latencyMs: latency, exitIp, error: null };
+}
 
-  return {
-    ok: true,
+/** 协议的中文名，用于界面提示 */
+export function protocolLabel(protocol: UpstreamProtocol): string {
+  if (protocol === 'socks5') return 'SOCKS5';
+  if (protocol === 'https') return 'HTTPS 代理';
+  return 'HTTP 代理';
+}
+
+/**
+ * 测试上游代理是否可用。
+ *
+ * 协议为 `auto` 时逐个尝试（HTTP → SOCKS5 → HTTPS），把第一个测通的记下来，
+ * 并保留每个协议的尝试结果，便于排查「为什么连不上」。
+ *
+ * @param cfg 完整的上游配置（含明文密码，仅主进程内调用）
+ * @param options 测试目标与出口 IP 端点的覆盖项，测试时用
+ */
+export async function testUpstream(cfg: UpstreamConfig, options: TestOptions = {}): Promise<TestResult> {
+  const base: TestResult = {
+    ok: false,
     protocol: cfg.protocol,
-    latencyMs: latency,
-    exitIp,
+    testedProtocol: null,
+    latencyMs: null,
+    exitIp: null,
     error: null,
-    detail: exitIp
-      ? `${protocolLabel} 隧道已建立，出口 IP：${exitIp}`
-      : `${protocolLabel} 隧道已建立（未能取到出口 IP，可能是查询接口被拦截，不影响使用）`,
+    detail: '',
+  };
+
+  if (!cfg.host || !cfg.port) {
+    return {
+      ...base,
+      error: '尚未填写服务器地址或端口',
+      detail: explainError({ code: 'ENOCONFIG' } as UpstreamError, cfg),
+    };
+  }
+
+  const auto = cfg.protocol === 'auto';
+  const candidates: UpstreamProtocol[] = auto ? AUTO_PROTOCOL_ORDER : [cfg.protocol as UpstreamProtocol];
+
+  const attempts: ProtocolAttempt[] = [];
+  const failures: string[] = [];
+
+  for (const protocol of candidates) {
+    const r = await tryProtocol(cfg, protocol, options);
+    attempts.push({
+      protocol,
+      ok: r.ok,
+      latencyMs: r.latencyMs,
+      error: r.error,
+    });
+
+    if (r.ok) {
+      return {
+        ok: true,
+        protocol: cfg.protocol,
+        testedProtocol: protocol,
+        latencyMs: r.latencyMs,
+        exitIp: r.exitIp,
+        error: null,
+        detail: r.exitIp
+          ? `${protocolLabel(protocol)} 隧道已建立，出口 IP：${r.exitIp}`
+          : `${protocolLabel(protocol)} 隧道已建立（未能取到出口 IP，可能是查询接口被拦截，不影响使用）`,
+        attempts: auto ? attempts : undefined,
+      };
+    }
+
+    failures.push(`${protocolLabel(protocol)}：${r.error ?? '失败'}`);
+  }
+
+  // 全部协议都不通：把每种协议的原因都摆出来，省得用户反复试
+  return {
+    ...base,
+    error: auto ? failures.join('；') : (attempts[0]?.error ?? '连接失败'),
+    detail: auto ? `三种协议都无法连接：${failures.join('；')}` : '隧道未能建立',
+    attempts: auto ? attempts : undefined,
   };
 }

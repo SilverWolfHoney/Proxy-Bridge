@@ -373,6 +373,7 @@ export class ProxyBridge extends EventEmitter {
       if (!upstreamCfg.host || !upstreamCfg.port) {
         throw new Error('尚未配置代理服务器，无法转发（可在应用中填写服务器地址，或把目标域名加入直连规则）');
       }
+      // 协议设为「自动」且尚未识别出来时，这里会抛出明确提示，引导用户先测一次
       const tunnel = await connectThroughUpstream(upstreamCfg, conn.host, conn.port);
       conn.latencyMs = Date.now() - conn.at;
       return { socket: tunnel.socket, route: 'proxy', init: tunnel.init };

@@ -115,14 +115,37 @@ export class ConfigStore {
 
     if (isPlainObject(patch.upstream)) {
       const raw = patch.upstream as DeepPartial<UpstreamConfig>;
-      if (raw.protocol === 'http' || raw.protocol === 'https' || raw.protocol === 'socks5') {
+
+      if (raw.protocol === 'http' || raw.protocol === 'https' || raw.protocol === 'socks5' || raw.protocol === 'auto') {
+        if (raw.protocol !== next.upstream.protocol) {
+          // 换了协议（或从具体协议改成自动）就作废上次的识别结果，避免用错协议
+          next.upstream.detectedProtocol = undefined;
+        }
         next.upstream.protocol = raw.protocol;
       }
-      if (typeof raw.host === 'string') next.upstream.host = raw.host.trim();
-      if (raw.port !== undefined) next.upstream.port = clampPort(raw.port, next.upstream.port);
+
+      if (typeof raw.host === 'string') {
+        const trimmed = raw.host.trim();
+        if (trimmed !== next.upstream.host) next.upstream.detectedProtocol = undefined;
+        next.upstream.host = trimmed;
+      }
+      if (raw.port !== undefined) {
+        const port = clampPort(raw.port, next.upstream.port);
+        if (port !== next.upstream.port) next.upstream.detectedProtocol = undefined;
+        next.upstream.port = port;
+      }
+
       if (typeof raw.authEnabled === 'boolean') next.upstream.authEnabled = raw.authEnabled;
-      if (typeof raw.username === 'string') next.upstream.username = raw.username;
+      if (typeof raw.username === 'string') {
+        if (raw.username !== next.upstream.username) next.upstream.detectedProtocol = undefined;
+        next.upstream.username = raw.username;
+      }
       if (typeof raw.password === 'string') next.upstream.password = raw.password;
+
+      if (raw.detectedProtocol === 'http' || raw.detectedProtocol === 'https' || raw.detectedProtocol === 'socks5') {
+        next.upstream.detectedProtocol = raw.detectedProtocol;
+      }
+
       if (raw.timeoutMs !== undefined) {
         const t = Number(raw.timeoutMs);
         if (Number.isFinite(t)) next.upstream.timeoutMs = Math.min(120_000, Math.max(1_000, Math.round(t)));
@@ -168,8 +191,11 @@ export class ConfigStore {
 
       if (isPlainObject(stored.upstream)) {
         const up = stored.upstream as Partial<StoredUpstream>;
-        if (up.protocol === 'http' || up.protocol === 'https' || up.protocol === 'socks5') {
+        if (up.protocol === 'http' || up.protocol === 'https' || up.protocol === 'socks5' || up.protocol === 'auto') {
           base.upstream.protocol = up.protocol;
+        }
+        if (up.detectedProtocol === 'http' || up.detectedProtocol === 'https' || up.detectedProtocol === 'socks5') {
+          base.upstream.detectedProtocol = up.detectedProtocol;
         }
         if (typeof up.host === 'string') base.upstream.host = up.host;
         if (up.port !== undefined) base.upstream.port = clampPort(up.port, 0);
@@ -226,6 +252,7 @@ export class ConfigStore {
       schemaVersion: SCHEMA_VERSION,
       upstream: {
         protocol: this.config.upstream.protocol,
+        detectedProtocol: this.config.upstream.detectedProtocol,
         host: this.config.upstream.host,
         port: this.config.upstream.port,
         authEnabled: this.config.upstream.authEnabled,

@@ -207,6 +207,8 @@ function resolveUpstream(input?: {
 
   return {
     protocol: input.protocol ?? saved.protocol,
+    // 用已保存的识别结果，避免每次都重新逐个协议尝试
+    detectedProtocol: saved.detectedProtocol,
     host: (input.host ?? saved.host).trim(),
     port: input.port ?? saved.port,
     authEnabled: input.authEnabled ?? saved.authEnabled,
@@ -301,8 +303,22 @@ function registerIpc(): void {
   ipcMain.handle(
     IPC.testUpstream,
     async (_e, input?: Parameters<typeof resolveUpstream>[0]): Promise<TestResult> => {
+      const cfg = resolveUpstream(input);
       // 测试结果里绝不回显密码
-      return testUpstream(resolveUpstream(input));
+      const result = await testUpstream(cfg);
+
+      // 协议设为「自动」时，把识别出来的协议记进配置：之后不必每次都逐个试
+      if (result.ok && result.testedProtocol && cfg.protocol === 'auto') {
+        const saved = store.getConfig().upstream;
+        const sameServer =
+          saved.host === cfg.host && saved.port === cfg.port && saved.username === cfg.username;
+        if (sameServer && saved.detectedProtocol !== result.testedProtocol) {
+          store.save({ upstream: { detectedProtocol: result.testedProtocol } });
+          pushConfigToBridge();
+        }
+      }
+
+      return result;
     },
   );
 

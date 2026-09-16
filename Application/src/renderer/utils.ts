@@ -5,7 +5,16 @@ export const DEFAULT_PORTS: Record<string, number> = {
   http: 8080,
   https: 8443,
   socks5: 1080,
+  auto: 8080,
 };
+
+/** 协议的中文名 */
+export function protocolLabel(protocol: string): string {
+  if (protocol === 'socks5') return 'SOCKS5';
+  if (protocol === 'https') return 'HTTPS 代理';
+  if (protocol === 'http') return 'HTTP 代理';
+  return protocol;
+}
 
 /** 字节数转可读文本 */
 export function formatBytes(bytes: number): string {

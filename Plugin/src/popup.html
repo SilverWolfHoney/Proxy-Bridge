@@ -19,6 +19,15 @@
         <span id="badge" class="badge badge--off">已关闭</span>
       </header>
 
+      <!-- 连接状态：用户最关心的一行，单独突出显示 -->
+      <section id="connCard" class="conn conn--idle">
+        <span id="connDot" class="conn__dot" aria-hidden="true"></span>
+        <div class="conn__text">
+          <strong id="connText" class="conn__title">未开启</strong>
+          <small id="connHint" class="conn__hint">打开下面的开关即可让浏览器走代理</small>
+        </div>
+      </section>
+
       <!-- 主开关 -->
       <button
         id="toggle"
@@ -47,12 +56,12 @@
           <span id="authText" class="row__value">未启用</span>
         </div>
         <div class="row">
-          <span class="row__label">代理状态</span>
-          <span id="proxyState" class="row__value">未启用</span>
+          <span class="row__label">出口 IP</span>
+          <span id="exitIp" class="row__value row__value--mono">—</span>
         </div>
         <div class="row">
-          <span class="row__label">最近应用</span>
-          <span id="appliedAt" class="row__value row__value--muted">—</span>
+          <span class="row__label">最近检测</span>
+          <span id="probeAt" class="row__value row__value--muted">—</span>
         </div>
       </section>
 
@@ -60,7 +69,7 @@
 
       <footer class="footer">
         <button id="openOptions" class="btn btn--primary" type="button">打开设置</button>
-        <button id="refresh" class="btn" type="button">重新应用</button>
+        <button id="refresh" class="btn" type="button">重新检测</button>
       </footer>
     </main>
 

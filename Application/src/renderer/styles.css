@@ -406,6 +406,41 @@ select {
   color: var(--text-dim);
 }
 
+/* 字段标签旁的小标记，例如「已识别：SOCKS5」 */
+.tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 5px;
+  font-size: 10.5px;
+  line-height: 1.7;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.tag--ok {
+  background: var(--success-soft);
+  color: var(--success);
+  border-color: rgba(52, 211, 153, 0.28);
+}
+
+/* 自动识别失败时，逐个协议列出的原因 */
+.attempts {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.7;
+  opacity: 0.92;
+}
+
+.attempts li {
+  word-break: break-word;
+}
+
+.attempts b {
+  font-weight: 600;
+}
+
 .field-hint {
   font-size: 11.5px;
   color: var(--text-faint);

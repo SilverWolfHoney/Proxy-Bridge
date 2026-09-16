@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { AppConfig, GlobalProxyState, SafeConfig, TestResult } from '../../shared/types';
 import type { ConfigUpdater } from '../hooks/useConfig';
-import { DEFAULT_PORTS, formatLatency } from '../utils';
+import { DEFAULT_PORTS, formatLatency, protocolLabel } from '../utils';
 export interface HomePageProps {
   config: SafeConfig;
   globalState: GlobalProxyState;
@@ -131,7 +131,12 @@ export function HomePage(props: HomePageProps): JSX.Element {
         <h2 className="card-title">代理服务器</h2>
         <div className="form-grid">
           <label className="field">
-            <span className="field-label">协议</span>
+            <span className="field-label">
+              协议
+              {upstream.protocol === 'auto' && upstream.detectedProtocol && (
+                <span className="tag tag--ok">已识别：{protocolLabel(upstream.detectedProtocol)}</span>
+              )}
+            </span>
             <select
               className="select"
               value={upstream.protocol}
@@ -139,10 +144,18 @@ export function HomePage(props: HomePageProps): JSX.Element {
                 props.patch({ upstream: { protocol: e.target.value as AppConfig['upstream']['protocol'] } })
               }
             >
+              <option value="auto">自动识别（推荐）</option>
               <option value="http">HTTP 代理</option>
               <option value="https">HTTPS 代理</option>
               <option value="socks5">SOCKS5</option>
             </select>
+            {upstream.protocol === 'auto' && (
+              <span className="field-hint">
+                {upstream.detectedProtocol
+                  ? '已记住识别结果，之后直接用这个协议'
+                  : '点「测试连接」会依次尝试三种协议，把能用的一种记下来'}
+              </span>
+            )}
           </label>
 
           <label className="field">
@@ -247,7 +260,15 @@ export function HomePage(props: HomePageProps): JSX.Element {
           >
             <span className="alert-icon">{testResult.ok ? '✓' : '⚠'}</span>
             <div>
-              <div>{testResult.ok ? `连接成功，握手耗时 ${formatLatency(testResult.latencyMs)}` : '连接失败'}</div>
+              <div>
+                {testResult.ok
+                  ? `连接成功，握手耗时 ${formatLatency(testResult.latencyMs)}${
+                      testResult.testedProtocol && testResult.protocol === 'auto'
+                        ? `（自动识别为 ${protocolLabel(testResult.testedProtocol)}）`
+                        : ''
+                    }`
+                  : '连接失败'}
+              </div>
               <div style={{ marginTop: 2, opacity: 0.9 }}>
                 {testResult.ok ? (
                   <>
@@ -257,6 +278,17 @@ export function HomePage(props: HomePageProps): JSX.Element {
                   testResult.error
                 )}
               </div>
+
+              {/* 自动模式失败时，列出每种协议各自的原因，省得反复试 */}
+              {!testResult.ok && testResult.attempts && testResult.attempts.length > 1 && (
+                <ul className="attempts">
+                  {testResult.attempts.map((a) => (
+                    <li key={a.protocol}>
+                      <b>{protocolLabel(a.protocol)}</b>：{a.error ?? '失败'}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           </div>
         )}

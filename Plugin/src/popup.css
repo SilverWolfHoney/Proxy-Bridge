@@ -114,6 +114,117 @@ body {
   border-color: rgba(245, 158, 11, 0.35);
 }
 
+/* ---------- 连接状态卡（界面主角） ---------- */
+
+.conn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.conn__dot {
+  position: relative;
+  width: 11px;
+  height: 11px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.conn__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.conn__title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.conn__hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 已连接 */
+.conn--ok {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
+.conn--ok .conn__dot {
+  background: var(--ok);
+  animation: conn-pulse 1.8s ease-in-out infinite;
+}
+
+.conn--ok .conn__title {
+  color: var(--ok);
+}
+
+/* 连接中 */
+.conn--connecting {
+  background: rgba(56, 189, 248, 0.1);
+  border-color: rgba(56, 189, 248, 0.3);
+}
+
+.conn--connecting .conn__dot {
+  background: var(--accent);
+  animation: conn-blink 0.9s ease-in-out infinite;
+}
+
+.conn--connecting .conn__title {
+  color: var(--accent);
+}
+
+/* 连不上 */
+.conn--failed {
+  background: rgba(248, 113, 113, 0.1);
+  border-color: rgba(248, 113, 113, 0.35);
+}
+
+.conn--failed .conn__dot {
+  background: var(--danger);
+}
+
+.conn--failed .conn__title {
+  color: var(--danger);
+}
+
+/* 未开启 */
+.conn--idle .conn__dot {
+  background: var(--text-faint);
+}
+
+@keyframes conn-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(34, 197, 94, 0);
+  }
+}
+
+@keyframes conn-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
 /* ---------- 主开关 ---------- */
 
 .toggle {

@@ -6,12 +6,17 @@
  *  - 明文密码只允许出现在主进程内存中，传递给渲染层的对象一律经过 `redactConfig` 脱敏。
  */
 
-/** 远程代理服务器使用的协议 */
+/**
+ * 远程代理服务器使用的协议。
+ * `auto` 是「用户的选择」，表示不确定，由程序逐个尝试后自行判断。
+ */
 export type UpstreamProtocol = 'http' | 'https' | 'socks5';
+export type UpstreamProtocolSetting = UpstreamProtocol | 'auto';
 
 /** 远程代理服务器配置（由用户填写，凭据本地加密存储） */
 export interface UpstreamConfig {
-  protocol: UpstreamProtocol;
+  /** 用户的选择；`auto` 表示由程序逐个尝试判断 */
+  protocol: UpstreamProtocolSetting;
   /** 服务器域名或 IP，空字符串表示尚未配置 */
   host: string;
   port: number;
@@ -22,6 +27,8 @@ export interface UpstreamConfig {
   password: string;
   /** 连接超时（毫秒） */
   timeoutMs: number;
+  /** 自动判断出的协议：判断过一次后记住它，下次不必重复尝试 */
+  detectedProtocol?: UpstreamProtocol;
 }
 
 /**
@@ -139,11 +146,23 @@ export interface GlobalProxyResult {
   error: string | null;
 }
 
+/** 单个协议的尝试记录，用于「自动」模式下告诉用户试过什么 */
+export interface ProtocolAttempt {
+  protocol: UpstreamProtocol;
+  ok: boolean;
+  /** 该协议的耗时；失败时为 null */
+  latencyMs: number | null;
+  /** 失败原因；成功时为 null */
+  error: string | null;
+}
+
 /** 上游代理连通性测试结果 */
 export interface TestResult {
   ok: boolean;
-  /** 尝试的协议 */
-  protocol: UpstreamProtocol;
+  /** 用户选择的设置（可能是 auto） */
+  protocol: UpstreamProtocolSetting;
+  /** 实际测通的协议；失败时为 null */
+  testedProtocol: UpstreamProtocol | null;
   /** 握手 + 建连耗时（毫秒） */
   latencyMs: number | null;
   /** 出口 IP（如果能取到） */
@@ -152,6 +171,8 @@ export interface TestResult {
   error: string | null;
   /** 人类可读的详细说明 */
   detail: string;
+  /** 自动模式下逐个协议尝试的结果 */
+  attempts?: ProtocolAttempt[];
 }
 
 /** 预加载脚本暴露给渲染层的 API */
@@ -160,7 +181,7 @@ export interface ProxyBridgeApi {
   saveConfig(patch: DeepPartial<AppConfig>): Promise<SafeConfig>;
   getStatus(): Promise<BridgeStatus>;
   testUpstream(input?: {
-    protocol?: UpstreamProtocol;
+    protocol?: UpstreamProtocolSetting;
     host?: string;
     port?: number;
     authEnabled?: boolean;
@@ -189,7 +210,7 @@ export type DeepPartial<T> = {
 /** 默认配置：刻意保持空白，不预置任何服务器信息 */
 export const DEFAULT_CONFIG: AppConfig = {
   upstream: {
-    protocol: 'http',
+    protocol: 'auto',
     host: '',
     port: 0,
     authEnabled: true,

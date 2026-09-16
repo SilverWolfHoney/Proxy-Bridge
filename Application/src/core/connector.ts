@@ -9,7 +9,7 @@
 
 import net from 'node:net';
 import tls from 'node:tls';
-import type { UpstreamConfig } from '../shared/types';
+import type { UpstreamConfig, UpstreamProtocol } from '../shared/types';
 
 export interface UpstreamError extends Error {
   code?: string;
@@ -357,22 +357,54 @@ export interface UpstreamTunnel {
   init: Buffer;
 }
 
+/** 自动判断协议时逐个尝试的顺序：从最常见的开始 */
+export const AUTO_PROTOCOL_ORDER: UpstreamProtocol[] = ['http', 'socks5', 'https'];
+
+/**
+ * 决定本次实际使用的协议。
+ * @param cfg 上游配置
+ * @param override 调用方指定的协议（例如自动检测正在试的那一种）
+ */
+export function resolveUpstreamProtocol(
+  cfg: UpstreamConfig,
+  override?: UpstreamProtocol,
+): UpstreamProtocol | null {
+  if (override) return override;
+  if (cfg.protocol === 'auto') return cfg.detectedProtocol ?? null;
+  return cfg.protocol;
+}
+
 /**
  * 通过上游代理连接到 host:port，成功后返回已连通的隧道。
  * 调用方负责在结束时销毁 socket，并把 `init` 转发给客户端。
+ *
+ * @param cfg 上游配置
+ * @param host 目标主机
+ * @param port 目标端口
+ * @param protocolOverride 覆盖协议；不传时按配置决定。
+ *                         配置为 `auto` 且尚未识别出协议时返回 ENOCONFIG 错误，
+ *                         调用方应先做一次 detectUpstreamProtocol。
  */
 export function connectThroughUpstream(
   cfg: UpstreamConfig,
   host: string,
   port: number,
+  protocolOverride?: UpstreamProtocol,
 ): Promise<UpstreamTunnel> {
   if (!cfg.host || !cfg.port) {
     return Promise.reject(fail('尚未配置代理服务器地址', 'ENOCONFIG'));
   }
-  if (cfg.protocol === 'socks5') {
-    return connectViaSocks5(cfg, host, port);
+
+  const protocol = resolveUpstreamProtocol(cfg, protocolOverride);
+  if (!protocol) {
+    return Promise.reject(fail('协议尚未确定，请先测试连接以自动识别', 'ENOCONFIG'));
   }
-  return connectViaHttp(cfg, host, port);
+
+  const effective: UpstreamConfig = { ...cfg, protocol };
+  if (protocol === 'socks5') {
+    return connectViaSocks5(effective, host, port);
+  }
+  return connectViaHttp(effective, host, port);
 }
 
 /** 直连目标（不走上游代理） */

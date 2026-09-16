@@ -148,6 +148,15 @@ function createSocks5ProxyServer(options: MockProxyOptions, record: MockProxy): 
 
         if (stage === 'request') {
           if (buffer.length < 4) return;
+
+          // 只接受合法的 SOCKS5 请求：版本必须是 0x05。
+          // 少了这一步，一个恰好打过来的 HTTP 请求（首字节 'C' = 0x43）会被当成
+          // SOCKS5 去解析，读到越界偏移，直接把进程搞崩。
+          if (buffer[0] !== 0x05) {
+            client.end(Buffer.from([0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0]));
+            return;
+          }
+
           const atyp = buffer[3];
           let need = 4;
           if (atyp === 0x01) need += 4;
@@ -155,6 +164,9 @@ function createSocks5ProxyServer(options: MockProxyOptions, record: MockProxy): 
           else if (atyp === 0x03) {
             if (buffer.length < 5) return;
             need += 1 + buffer[4];
+          } else {
+            client.end(Buffer.from([0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0]));
+            return;
           }
           need += 2;
           if (buffer.length < need) return;

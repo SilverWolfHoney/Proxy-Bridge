@@ -61,6 +61,37 @@ export const DEFAULT_STATE = Object.freeze({
   appliedAt: 0,
   /** 最近一次变更原因，便于排查 */
   lastReason: '',
+
+  /* ---- 连通性探测：证明代理是真的能用，而不只是「已写入配置」 ---- */
+
+  /** 连通状态：unknown（还没测）/ connecting（正在测）/ connected / failed */
+  connection: 'unknown',
+  /** 探测成功时拿到的出口 IP */
+  exitIp: '',
+  /** 本轮的连续失败次数（成功或重新开启时归零） */
+  probeFailures: 0,
+  /** 最近一次探测的时间 */
+  lastProbeAt: 0,
+  /** 探测失败的原因 */
+  probeError: '',
+});
+
+/**
+ * 连通性探测参数。
+ *
+ * 开启时立刻测一次（第 0 秒）；失败后按 30 / 60 / 90 / 120 秒重试，
+ * 最坏情况下共测 5 次、累计正好 5 分钟，之后停止自动重试，
+ * 等用户手动点「重新检测」。这样既给了足够的恢复机会，又不会没完没了地耗流量。
+ */
+export const PROBE = Object.freeze({
+  /** 单次探测超时（毫秒） */
+  timeoutMs: 4000,
+  /** 失败后依次等待的秒数；累计 300 秒 = 5 分钟 */
+  retryDelaysSec: Object.freeze([30, 60, 90, 120]),
+  /** 连通之后的常态心跳间隔（毫秒） */
+  heartbeatMs: 60_000,
+  /** 用于探测的纯文本端点，按顺序尝试 */
+  endpoints: Object.freeze(['https://api.ipify.org', 'https://icanhazip.com']),
 });
 
 /** 端口合法范围。 */
