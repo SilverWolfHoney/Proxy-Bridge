@@ -19,9 +19,22 @@ import {
   type UpstreamConfig,
 } from '../shared/types';
 
-/** 磁盘上的结构：密码被替换成加密串 */
-interface StoredUpstream extends Omit<UpstreamConfig, 'password'> {
+/**
+ * 磁盘上的结构：密码被替换成加密串
+ *
+ * host / port / username 同样是敏感信息（看一眼就知道你在用哪个代理、哪个账号），
+ * 所以也一并加密存放，字段名加 `Enc` 后缀；对应的明文字段不再写入，
+ * 但读取时仍然兼容老文件，读进来后会立刻按新格式重写一遍。
+ */
+interface StoredUpstream extends Omit<UpstreamConfig, 'password' | 'host' | 'port' | 'username'> {
   passwordEnc: string | null;
+  hostEnc?: string | null;
+  portEnc?: string | null;
+  usernameEnc?: string | null;
+  /** 老格式遗留的明文字段，仅用于读取兼容 */
+  host?: string;
+  port?: number;
+  username?: string;
 }
 
 interface StoredConfig extends Omit<AppConfig, 'upstream'> {
@@ -53,6 +66,45 @@ function clampPort(value: unknown, fallback: number): number {
   return num;
 }
 
+/**
+ * 加密一段文本。
+ * 优先用 safeStorage（Windows 下是 DPAPI，只有当前用户能解开）；
+ * 环境不支持时退化为带 `plain:` 前缀的 base64 —— 那只是编码、不是加密，
+ * 但明确标注出来，不静默假装安全。
+ */
+function encryptText(plain: string): string | null {
+  if (!plain) return null;
+  try {
+    if (safeStorage.isEncryptionAvailable()) {
+      return 'enc:' + safeStorage.encryptString(plain).toString('base64');
+    }
+  } catch (err) {
+    console.error('[config] 加密失败，将退化为明文存储：', err);
+  }
+  return 'plain:' + Buffer.from(plain, 'utf8').toString('base64');
+}
+
+/** 解开 encryptText 的结果；任何失败都返回空串，让调用方回退到默认值 */
+function decryptText(storedValue: string | null | undefined): string {
+  if (!storedValue) return '';
+  try {
+    if (storedValue.startsWith('enc:')) {
+      return safeStorage.decryptString(Buffer.from(storedValue.slice(4), 'base64'));
+    }
+    if (storedValue.startsWith('plain:')) {
+      return Buffer.from(storedValue.slice(6), 'base64').toString('utf8');
+    }
+  } catch (err) {
+    console.error('[config] 解密失败，需要重新填写：', err);
+  }
+  return '';
+}
+
+/** 从 StoredUpstream 上按动态字段名取一个值；字段名是拼出来的，绕过静态类型检查 */
+function pickField(source: object, key: string): unknown {
+  return (source as Record<string, unknown>)[key];
+}
+
 export interface ConfigStoreOptions {
   /** 配置文件所在目录，通常是 app.getPath('userData') */
   dir: string;
@@ -63,10 +115,13 @@ export interface ConfigStoreOptions {
 export class ConfigStore {
   private readonly filePath: string;
   private config: AppConfig;
+  /** 读取时是否碰到了老格式的明文字段 */
+  private legacyPlaintext = false;
 
   constructor(options: ConfigStoreOptions) {
     this.filePath = path.join(options.dir, options.fileName ?? 'config.json');
     this.config = this.readFromDisk();
+    this.migrateLegacyPlaintext();
   }
 
   /** 配置文件绝对路径 */
@@ -175,6 +230,22 @@ export class ConfigStore {
     return this.getSafeConfig();
   }
 
+  /**
+   * 老版本把 host / port / username 以明文写在文件里。
+   * 一旦读到这种文件，立刻按新格式重写一遍，旧字段随之消失，
+   * 不需要用户重新填写任何东西，也不用等下次保存才生效。
+   */
+  private migrateLegacyPlaintext(): void {
+    if (!this.legacyPlaintext) return;
+    try {
+      this.writeToDisk();
+      console.log('[config] 已把配置文件中的服务器地址、端口与账号改为加密存放');
+    } catch (err) {
+      // 迁移失败不影响本次使用，只是这次仍然以明文留在磁盘上
+      console.error('[config] 迁移为加密格式失败：', err);
+    }
+  }
+
   /* ---------------------------------------------------------------- */
   /* 磁盘读写                                                          */
   /* ---------------------------------------------------------------- */
@@ -197,15 +268,37 @@ export class ConfigStore {
         if (up.detectedProtocol === 'http' || up.detectedProtocol === 'https' || up.detectedProtocol === 'socks5') {
           base.upstream.detectedProtocol = up.detectedProtocol;
         }
-        if (typeof up.host === 'string') base.upstream.host = up.host;
-        if (up.port !== undefined) base.upstream.port = clampPort(up.port, 0);
+
+        // 三个敏感字段：新格式是 *Enc（加密串），老格式是明文；两者都认，明文读到时标记迁移
+        const hostPlain = typeof up.host === 'string' ? up.host.trim() : '';
+        const hostEnc = pickField(up, 'hostEnc');
+        const host = typeof hostEnc === 'string' ? decryptText(hostEnc).trim() : '';
+        base.upstream.host = host || hostPlain;
+        if (hostPlain) this.legacyPlaintext = true;
+
+        const portEnc = pickField(up, 'portEnc');
+        const portPlain = typeof up.port === 'number' ? up.port : 0;
+        const portDecrypted = typeof portEnc === 'string' ? Number(decryptText(portEnc)) : NaN;
+        base.upstream.port = clampPort(
+          Number.isFinite(portDecrypted) && portDecrypted > 0 ? portDecrypted : portPlain,
+          0,
+        );
+        if (portPlain > 0) this.legacyPlaintext = true;
+
         if (typeof up.authEnabled === 'boolean') base.upstream.authEnabled = up.authEnabled;
-        if (typeof up.username === 'string') base.upstream.username = up.username;
+
+        const userPlain = typeof up.username === 'string' ? up.username : '';
+        const userEnc = pickField(up, 'usernameEnc');
+        const userDecrypted = typeof userEnc === 'string' ? decryptText(userEnc) : '';
+        base.upstream.username = userDecrypted || userPlain;
+        if (userPlain) this.legacyPlaintext = true;
+
         if (up.timeoutMs !== undefined) {
           const t = Number(up.timeoutMs);
           if (Number.isFinite(t)) base.upstream.timeoutMs = Math.min(120_000, Math.max(1_000, Math.round(t)));
         }
-        base.upstream.password = this.decryptPassword(up.passwordEnc ?? null);
+        base.upstream.password = decryptText(up.passwordEnc ?? null);
+        if (typeof pickField(up, 'password') === 'string') this.legacyPlaintext = true;
       }
 
       if (isPlainObject(stored.bridge)) {
@@ -253,12 +346,12 @@ export class ConfigStore {
       upstream: {
         protocol: this.config.upstream.protocol,
         detectedProtocol: this.config.upstream.detectedProtocol,
-        host: this.config.upstream.host,
-        port: this.config.upstream.port,
+        hostEnc: encryptText(this.config.upstream.host),
+        portEnc: encryptText(this.config.upstream.port > 0 ? String(this.config.upstream.port) : ''),
         authEnabled: this.config.upstream.authEnabled,
-        username: this.config.upstream.username,
+        usernameEnc: encryptText(this.config.upstream.username),
         timeoutMs: this.config.upstream.timeoutMs,
-        passwordEnc: this.encryptPassword(this.config.upstream.password),
+        passwordEnc: encryptText(this.config.upstream.password),
       },
       bridge: { ...this.config.bridge },
       rules: { direct: this.config.rules.direct.slice(), proxy: this.config.rules.proxy.slice() },
@@ -271,34 +364,6 @@ export class ConfigStore {
     const tmp = `${this.filePath}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(stored, null, 2), { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(tmp, this.filePath);
-  }
-
-  private encryptPassword(plain: string): string | null {
-    if (!plain) return null;
-    try {
-      if (safeStorage.isEncryptionAvailable()) {
-        return 'enc:' + safeStorage.encryptString(plain).toString('base64');
-      }
-    } catch (err) {
-      console.error('[config] 密码加密失败，将退化为明文存储：', err);
-    }
-    // 明确标注明文，便于用户识别风险
-    return 'plain:' + Buffer.from(plain, 'utf8').toString('base64');
-  }
-
-  private decryptPassword(storedValue: string | null): string {
-    if (!storedValue) return '';
-    try {
-      if (storedValue.startsWith('enc:')) {
-        return safeStorage.decryptString(Buffer.from(storedValue.slice(4), 'base64'));
-      }
-      if (storedValue.startsWith('plain:')) {
-        return Buffer.from(storedValue.slice(6), 'base64').toString('utf8');
-      }
-    } catch (err) {
-      console.error('[config] 密码解密失败，需要重新填写：', err);
-    }
-    return '';
   }
 }
 

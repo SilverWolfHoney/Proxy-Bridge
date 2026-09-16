@@ -10,7 +10,6 @@
  */
 
 import { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, shell } from 'electron';
-import fs from 'node:fs';
 import path from 'node:path';
 import { ConfigStore } from './store';
 import { ProxyBridge } from '../core/bridge';
@@ -29,65 +28,6 @@ import {
   type UpstreamConfig,
 } from '../shared/types';
 
-/** 日志文件大小上限；超过就整体丢弃重来，避免在用户机器上无限增长 */
-const MAX_LOG_BYTES = 1024 * 1024;
-
-/**
- * 接管主进程的 stdout / stderr。
- *
- * 不接管会出两类问题：
- *  1) EPIPE 崩溃 —— 输出被接到管道后，读的那一端一关，console.log 当场抛异常。
- *     这个异常在启动路径上没人接，直接导致应用起不来（真实踩过）。
- *  2) 打包后是 GUI 程序，本来就没有控制台，出了错什么痕迹都不留。
- *
- * 所以：把四个方法全部指向自己写的日志文件，并且任何写失败都只吞掉、绝不外抛。
- */
-function setupProcessStreams(): void {
-  let logFile: string | null = null;
-  const logPath = (): string | null => {
-    if (logFile !== null) return logFile || null;
-    try {
-      logFile = path.join(app.getPath('userData'), 'main.log');
-    } catch {
-      logFile = '';
-    }
-    return logFile || null;
-  };
-
-  const write = (level: string, args: unknown[]): void => {
-    const text = args
-      .map((a) => (typeof a === 'string' ? a : a instanceof Error ? (a.stack ?? a.message) : String(a)))
-      .join(' ');
-    const line = `[${new Date().toISOString()}] [${level}] ${text}\n`;
-    // 逐级兜底：能写文件就写文件，写不了就尝试原本的输出流，两者都失败也必须安静地过去
-    const file = logPath();
-    if (file) {
-      try {
-        // 超过上限就整体丢弃重来：日志只用于排查，不能让它在用户机器上无限长大
-        if (fs.existsSync(file) && fs.statSync(file).size > MAX_LOG_BYTES) {
-          fs.rmSync(file, { force: true });
-        }
-        fs.appendFileSync(file, line, 'utf8');
-        return;
-      } catch {
-        /* 落到下面的 stdout */
-      }
-    }
-    try {
-      if (process.stdout?.writable) process.stdout.write(line);
-    } catch {
-      /* 写不出去就算了，绝不能让日志把应用带崩 */
-    }
-  };
-
-  console.log = (...args: unknown[]) => write('info', args);
-  console.info = (...args: unknown[]) => write('info', args);
-  console.warn = (...args: unknown[]) => write('warn', args);
-  console.error = (...args: unknown[]) => write('error', args);
-}
-
-setupProcessStreams();
-
 /**
  * 是否以开发模式运行（连接 Vite 开发服务器，而不是加载构建产物）。
  *
@@ -97,6 +37,31 @@ setupProcessStreams();
  */
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL ?? '';
 const isDev = DEV_SERVER_URL.length > 0;
+
+/**
+ * 关掉主进程的所有控制台输出。
+ *
+ * 两个目的，缺一不可：
+ *
+ *  1) **避免 EPIPE 崩溃**。输出一旦被接到管道，读的那一端关闭后再调用 console.log
+ *     就会抛 EPIPE；这类调用散落在启动路径上、没人接住，应用会直接起不来（真实踩过）。
+ *     让 console 什么都不做，就从根上不会有这次写入。
+ *
+ *  2) **不留痕**。日志里会带出代理服务器地址（例如「无法连接代理服务器 1.2.3.4:9999」），
+ *     而错误对象里往往还夹着其它上下文。与其逐处脱敏、漏一个就前功尽弃，不如根本不写。
+ *
+ * 开发模式下保留原生行为，否则本地调试时什么都看不见。
+ */
+function silenceProcessStreams(): void {
+  if (isDev) return;
+  const noop = (): void => {};
+  console.log = noop;
+  console.info = noop;
+  console.warn = noop;
+  console.error = noop;
+}
+
+silenceProcessStreams();
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;

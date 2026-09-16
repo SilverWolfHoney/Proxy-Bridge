@@ -118,8 +118,10 @@ SOCKS5：连接超时」），不必自己反复试。
 %APPDATA%\proxy-bridge\config.json
 ```
 
-- 密码字段用 **Windows DPAPI** 加密后存储（密文前缀 `enc:`）
+- **服务器地址、端口、账号、密码**都用 **Windows DPAPI** 加密后存储（密文前缀 `enc:`），
+  字段名分别为 `hostEnc` / `portEnc` / `usernameEnc` / `passwordEnc`；文件里看不到明文
 - 若当前系统不支持加密，会退化为**带明确标记**的明文存储（前缀 `plain:`），不会静默降级
+- 老版本留下的明文字段（`host` / `port` / `username`）在读取时会自动迁移成加密格式，无需重填
 - 该文件**不在仓库目录内**，不会被提交到版本库
 - 卸载时删掉整个 `%APPDATA%\proxy-bridge\` 目录即可彻底清除
 
