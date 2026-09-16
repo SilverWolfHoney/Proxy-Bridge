@@ -94,6 +94,18 @@ function resourcePath(file: string): string {
   return path.join(app.getAppPath(), 'resources', file);
 }
 
+/**
+ * 读取托盘图标。
+ *
+ * 源图给的是 32px：Windows 会按 DPI 自行缩放（16 缩放的观感比从 16 放大好），
+ * 在 125%/150% 缩放下还能用上更清晰的版本。
+ */
+function loadTrayIcon(file: string): Electron.NativeImage {
+  const image = nativeImage.createFromPath(resourcePath(file));
+  if (image.isEmpty()) return image;
+  return image.resize({ width: 32, height: 32, quality: 'best' });
+}
+
 /** 显示并聚焦主窗口 */
 function showMainWindow(): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -112,7 +124,8 @@ function refreshTray(): void {
   const state = currentGlobalState();
   const detail = state.enabled ? `已开启（${state.listen ?? '启动中'}）` : '未开启';
 
-  tray.setImage(nativeImage.createFromPath(resourcePath(state.enabled ? 'tray-on.png' : 'tray-off.png')));
+  const icon = loadTrayIcon(state.enabled ? 'tray-on-32.png' : 'tray-off-32.png');
+  if (!icon.isEmpty()) tray.setImage(icon);
   tray.setToolTip(`Proxy Bridge · 全局代理${detail}`);
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -141,7 +154,7 @@ function refreshTray(): void {
 function createTray(): void {
   if (tray) return;
 
-  const image = nativeImage.createFromPath(resourcePath('tray-off.png'));
+  const image = loadTrayIcon('tray-off-32.png');
   if (image.isEmpty()) {
     console.error('[tray] 托盘图标读取失败，托盘将不可用');
     return;
@@ -300,6 +313,8 @@ function resolveUpstream(input?: {
 /* ------------------------------------------------------------------ */
 
 function createWindow(): void {
+  const windowIcon = nativeImage.createFromPath(resourcePath('app.png'));
+
   mainWindow = new BrowserWindow({
     width: 620,
     height: 620,
@@ -308,6 +323,8 @@ function createWindow(): void {
     show: false,
     backgroundColor: '#0f1115',
     title: 'Proxy Bridge',
+    // 开发运行时用这张；打包后 Windows 会用 exe 自带的图标
+    ...(windowIcon.isEmpty() ? {} : { icon: windowIcon }),
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

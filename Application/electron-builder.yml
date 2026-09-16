@@ -1,0 +1,52 @@
+# electron-builder 打包配置
+#
+# 产物输出到 Application/release/：
+#   Proxy Bridge Setup x.y.z.exe   安装程序（可自选安装目录、创建快捷方式）
+#   Proxy Bridge x.y.z.exe         免安装版，双击直接运行
+#
+# 注意：应用自身的构建产物在 dist/（package.json 的 main 指向那里），
+# 这里的产物必须放到别的目录，否则会互相覆盖。
+#
+# 图标由 npm run icon 生成到 resources/，打包前会自动跑一次。
+
+appId: com.proxybridge.app
+productName: Proxy Bridge
+
+directories:
+  output: release
+
+# 只把运行需要的东西打进去，源码/测试/脚本不参与
+files:
+  - dist/**/*
+  - package.json
+
+# 图标放在 asar 外面，主进程用 process.resourcesPath 读取
+extraResources:
+  - from: resources
+    to: resources
+
+win:
+  icon: resources/app.ico
+  # 同时产出安装程序与免安装版
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+
+nsis:
+  # 走引导式安装，让用户能自选安装位置
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Proxy Bridge
+  artifactName: ${productName} Setup ${version}.${ext}
+
+portable:
+  artifactName: ${productName} ${version}.${ext}
+
+# 不发布到任何地方，只是本地打包
+publish: null

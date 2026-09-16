@@ -1,7 +1,7 @@
 {
   "name": "proxy-bridge",
   "version": "0.1.0",
-  "description": "代理网关桌面应用：把浏览器流量经由本机转发到远程代理服务器",
+  "description": "全局代理桌面应用：让整台 Windows 的流量经由远程代理服务器",
   "private": true,
   "main": "dist/main/main.js",
   "scripts": {
@@ -12,7 +12,10 @@
     "start": "npm run build && electron .",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
     "test": "tsc -p tsconfig.test.json && node --test \"tests-dist/tests/*.test.js\"",
-    "clean": "node -e \"const fs=require('fs');for(const d of ['dist','tests-dist'])fs.rmSync(d,{recursive:true,force:true})\""
+    "icon": "electron scripts/make-icons.mjs",
+    "dist": "npm run build && npm run icon && node scripts/build-dist.mjs",
+    "dist:dir": "npm run build && npm run icon && node scripts/build-dist.mjs --dir",
+    "clean": "node -e \"const fs=require('fs');for(const d of ['dist','tests-dist','release'])fs.rmSync(d,{recursive:true,force:true})\""
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
@@ -20,6 +23,7 @@
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^33.3.1",
+    "electron-builder": "^25.1.8",
     "typescript": "^5.7.2",
     "vite": "^6.0.7"
   },

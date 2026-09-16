@@ -99,8 +99,9 @@ Chrome / Edge 打开 `chrome://extensions` → 开启**开发者模式** → **�
 cd Application
 npm run dev         # 开发模式：Vite + Electron，界面热更新
 npm run typecheck   # 类型检查（主进程 + 界面）
-npm test            # 单元测试 + 网关端到端测试（全部使用本机模拟服务，不联网）
+npm test            # 单元测试 + 端到端测试（全部使用本机模拟服务，不联网）
 npm run build       # 只构建，不启动
+npm run dist        # 打包成 exe（安装程序 + 免安装版，产物在 release/）
 ```
 
 浏览器扩展是纯原生 JS/HTML/CSS，无依赖、无构建步骤，改完在 `chrome://extensions` 里点一下刷新即可。
@@ -110,13 +111,20 @@ npm run build       # 只构建，不启动
 `npm test` 会用本机临时服务完整走一遍代理链路，不接触任何外部服务器：
 
 - **直连例外匹配**：域名/通配符/端口限定的各种写法
+- **协议自动识别**：mock 只支持某一种协议时能否识别出来，全不通时是否逐个给出原因
 - **HTTP 与 SOCKS5 上游转发**：认证注入、认证失败处理
 - **字节级时序**：隧道建立瞬间，目标首包与握手应答落在同一个 TCP 段时，不能丢字节也不能串位
 - **健康检查端点**：供外部探测应用是否在运行
+
+### 图标
+
+`Application/ico/` 下是图标原图（一张细节完整的、一张简化版），
+由 `Application/scripts/make-icons.mjs` 生成 exe 与托盘用的图标。
+换图后跑 `npm run icon` 重新生成即可，细节见 [Application/README.md](Application/README.md)。
 
 ---
 
 ## 文档
 
-- [Application/README.md](Application/README.md) —— 桌面应用：配置项、常见问题
+- [Application/README.md](Application/README.md) —— 桌面应用：配置项、打包、常见问题
 - [Plugin/README.md](Plugin/README.md) —— 浏览器扩展：权限说明、SOCKS5 认证限制、排错

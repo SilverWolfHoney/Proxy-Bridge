@@ -183,6 +183,45 @@ Application/
 
 ---
 
+## 打包成 exe
+
+```powershell
+npm run dist        # 安装程序 + 免安装版
+npm run dist:dir    # 只出免安装目录（快，用于验证）
+npm run icon        # 只重新生成图标
+```
+
+产物在 `release/`：
+
+| 文件 | 说明 |
+| --- | --- |
+| `Proxy Bridge Setup 0.1.0.exe` | 安装程序，可自选安装位置，创建桌面与开始菜单快捷方式 |
+| `Proxy Bridge 0.1.0.exe` | 免安装版，双击直接运行 |
+| `win-unpacked/` | 解压后的完整目录，方便排查问题 |
+
+`release/` 不入库（体积大且可随时重新生成）。
+
+### 打包时为什么走镜像
+
+electron-builder 除了 npm 包，还要另外下载一份 Electron 二进制和 NSIS 等工具，
+默认从 GitHub 拉取。本机直连 GitHub 会超时，所以 `scripts/build-dist.mjs` 里
+固定把 `ELECTRON_MIRROR` 与 `ELECTRON_BUILDER_BINARIES_MIRROR` 指向 npmmirror。
+这样无论用 npm、pnpm 还是 yarn 执行，都不会因为网络卡住。
+
+首次打包要多下约 120 MB 的工具，之后会复用缓存。
+
+### 图标
+
+图标不是二进制素材，而是由 `scripts/make-icons.mjs` 从 `ico/` 下的原图生成：
+
+- `ico/emote_*.png`（细节完整的大图）→ `resources/app.ico`（16/32/48/64/128/256）与 `app.png`
+- `ico/tab_*.png`（同一角色的简化版）→ `resources/tray-off-32.png` 与 `tray-on-32.png`
+
+托盘之所以用另一张简化图：托盘实际只有 16~32 像素，细节太多的图缩下去会糊成色块。
+换了原图后跑一次 `npm run icon` 即可重新生成。
+
+---
+
 ## 开发
 
 ```powershell
@@ -190,7 +229,7 @@ npm run dev         # 开发模式：Vite + Electron，界面改动热更新
 npm run typecheck   # 类型检查（主进程 + 界面）
 npm test            # 全部测试
 npm run build       # 只构建
-npm run clean       # 清掉构建产物
+npm run clean       # 清掉 dist / tests-dist / release
 ```
 
 **别用 `npx electron .`** —— 那会被当成开发模式去连一个没启动的开发服务器，结果是空白窗口。
@@ -201,6 +240,7 @@ npm run clean       # 清掉构建产物
 测试全部使用本机临时服务，不接触任何外部服务器、不联网：
 
 - 直连例外匹配：域名、通配符、端口限定的各种写法与优先级
+- 协议自动识别：让 mock 只支持某一种协议，验证能否识别出来、失败时是否逐个给出原因
 - HTTP 与 SOCKS5 上游转发：认证头注入、认证失败处理、失败统计
 - 字节级时序：隧道建立瞬间，目标首包与握手应答落在同一个 TCP 段时，不丢字节也不串位
 - 健康检查端点：用于外部探测应用是否在运行

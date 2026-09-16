@@ -4,6 +4,8 @@ dist-electron/
 tests-dist/
 build/
 out/
+# 打包产物：体积大且可随时重新生成
+release/
 *.log
 *.tmp
 .DS_Store
