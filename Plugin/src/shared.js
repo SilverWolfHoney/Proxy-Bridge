@@ -187,8 +187,13 @@ export function normalizeConfig(raw) {
    * 已保存的密码**不回填到界面**：界面上密码框永远从空白开始，
    * 想改就重新输入，不改就留空沿用已保存的那个。
    * 这样即使有人看到屏幕，也看不到密码。
+   *
+   * 兼容早期版本（那时没有这个字段）：存储里确实有密码就认为已保存，
+   * 否则升级后用户会被要求重新输入一次。
    */
-  const hasPassword = source.hasPassword === true;
+  const hasPassword =
+    source.hasPassword === true ||
+    (source.hasPassword === undefined && typeof source.password === 'string' && source.password.length > 0);
 
   // 不记住、或已被清空时，读取一律返回空串
   const password =
