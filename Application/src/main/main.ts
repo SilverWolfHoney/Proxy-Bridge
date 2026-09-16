@@ -118,6 +118,46 @@ function showMainWindow(): void {
 }
 
 /**
+ * 退出前的清理，只执行一次，完成后直接结束进程。
+ * @param reason 触发来源，仅用于日志
+ */
+function cleanupAndExit(reason: string): void {
+  if (quitting) return;
+  quitting = true;
+
+  void (async () => {
+    try {
+      // 无论如何都要把系统代理还原回去，不能让用户退出后断网
+      if (systemProxyApplied || systemProxy.hasStaleSnapshot) {
+        await systemProxy.restore();
+      }
+      await bridge.stop();
+    } catch (err) {
+      console.error(`[quit:${reason}] 清理失败：`, err);
+    } finally {
+      app.exit(0);
+    }
+  })();
+}
+
+/**
+ * 系统关机 / 重启 / 注销时的处理（win32 的窗口事件）。
+ *
+ * 不做这件事的后果：Windows 会保留代理设置，而本机网关已经不在了，
+ * 下次开机所有走系统代理的程序都连不上，用户得自己去关掉代理。
+ *
+ * 这个事件不提供 event、无法阻止系统，所以只能力所能及：
+ * 先用**同步**写注册表关掉代理开关（不依赖事件循环，来得及），
+ * 再走异步还原；万一系统没等我们做完，下次启动应用也会还原残留。
+ */
+function handleSessionEnd(): void {
+  if (quitting) return;
+  console.info('[session-end] 系统正在关机或注销，先同步关闭系统代理');
+  systemProxy.disableSync();
+  cleanupAndExit('session-end');
+}
+
+/**
  * 刷新托盘的提示与菜单。
  *
  * 图标本身不随状态变化：曾经用「已开启时整体偏绿」来区分状态，
@@ -365,6 +405,12 @@ function createWindow(): void {
     mainWindow = null;
   });
 
+  // 系统关机 / 重启 / 注销：这是 BrowserWindow 上的事件（win32），不是 app 上的。
+  // 窗口虽然在点 X 时被隐藏，但依然存在，所以监听器一直有效。
+  mainWindow.on('session-end', () => {
+    handleSessionEnd();
+  });
+
   // 站内链接用系统浏览器打开，不在应用里开新窗口
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
@@ -523,20 +569,16 @@ if (!app.requestSingleInstanceLock()) {
   app.on('before-quit', (event) => {
     if (quitting) return;
     event.preventDefault();
-    quitting = true;
-
-    void (async () => {
-      try {
-        // 无论如何都要把系统代理还原回去，不能让用户退出后断网
-        if (systemProxyApplied || systemProxy.hasStaleSnapshot) {
-          await systemProxy.restore();
-        }
-        await bridge.stop();
-      } catch (err) {
-        console.error('[quit] 清理失败：', err);
-      } finally {
-        app.exit(0);
-      }
-    })();
+    cleanupAndExit('quit');
   });
+
+  // 仅用于自动化验证的钩子：带上这个环境变量时，启动若干秒后自动走正常退出流程，
+  // 方便检验便携版是否会在退出后清理它解压出来的临时目录。
+  if (process.env.PROXY_BRIDGE_QUIT_AFTER_MS) {
+    const delay = Number(process.env.PROXY_BRIDGE_QUIT_AFTER_MS);
+    if (Number.isFinite(delay) && delay > 0) {
+      console.info(`[test] 将在 ${delay}ms 后自动退出`);
+      setTimeout(() => cleanupAndExit('test-hook'), delay);
+    }
+  }
 }

@@ -7,7 +7,7 @@
  * 原始设置会同时落盘缓存，即使应用被强杀，下次启动也能一键还原。
  */
 
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -98,6 +98,14 @@ export async function readProxySnapshot(): Promise<ProxySnapshot> {
 
 async function writeValue(name: string, type: 'REG_DWORD' | 'REG_SZ', value: string): Promise<void> {
   await runReg(['add', REG_KEY, '/v', name, '/t', type, '/d', value, '/f']);
+}
+
+/** 同步写注册表：只用在「系统要关机了、来不及等异步」的场景 */
+function writeValueSync(name: string, type: 'REG_DWORD' | 'REG_SZ', value: string): void {
+  execFileSync('reg.exe', ['add', REG_KEY, '/v', name, '/t', type, '/d', value, '/f'], {
+    windowsHide: true,
+    stdio: 'ignore',
+  });
 }
 
 async function deleteValue(name: string): Promise<void> {
@@ -255,6 +263,26 @@ export class SystemProxyManager {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, applied: null, error: `还原系统代理失败：${message}` };
+    }
+  }
+
+  /**
+   * 同步关闭系统代理开关，用于「系统正在关机/注销、来不及等异步」的场景。
+   *
+   * 只做最关键的一件事：把 ProxyEnable 置 0。
+   * 这样即使 ProxyServer 还指着本机端口，重启后也没有程序会去用它；
+   * 用户原有的代理设置仍完整留在备份里，下次启动应用时会还原回去。
+   *
+   * @returns 是否成功
+   */
+  disableSync(): boolean {
+    if (process.platform !== 'win32') return false;
+    try {
+      writeValueSync('ProxyEnable', 'REG_DWORD', '0');
+      return true;
+    } catch (err) {
+      console.error('[systemProxy] 同步关闭系统代理失败：', err);
+      return false;
     }
   }
 
