@@ -6,8 +6,10 @@
  * 这样无论用哪个包管理器（npm/pnpm/yarn）执行，镜像设置都生效。
  *
  * 用法：
- *   node scripts/build-dist.mjs            打包安装程序 + 免安装版
- *   node scripts/build-dist.mjs --dir      只产出免安装目录（快，用于验证）
+ *   node scripts/build-dist.mjs                     打包安装程序 + 免安装版
+ *   node scripts/build-dist.mjs --dir               只产出免安装目录（快，用于验证）
+ *   node scripts/build-dist.mjs --out=<目录> [参数]  换输出目录，其余参数交给 electron-builder
+ *    例如只出安装程序：--out=dist-verify -c.win.target=nsis
  */
 
 import fs from 'node:fs';
@@ -16,7 +18,25 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const extraArgs = process.argv.slice(2);
+
+/* 解析 --out=<目录>：临时换个输出位置（用于产出额外的一套包），
+ * 其余参数原样交给 electron-builder。 */
+const rawArgs = process.argv.slice(2);
+let outputDir = path.resolve(ROOT, '..', 'release');
+const extraArgs = [];
+
+for (const arg of rawArgs) {
+  const match = /^--out=(.+)$/.exec(arg);
+  if (match) {
+    outputDir = path.resolve(ROOT, '..', match[1]);
+    continue;
+  }
+  extraArgs.push(arg);
+}
+
+// electron-builder 的 output 是相对配置所在目录（Application/）解析的，
+// 这里换算成相对路径，避免绝对路径里的反斜杠被 shell 吃掉
+const outputRelativeToApp = path.relative(ROOT, outputDir).split(path.sep).join('/');
 
 const env = {
   ...process.env,
@@ -31,9 +51,10 @@ const env = {
 const bin = path.join(ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'electron-builder.cmd' : 'electron-builder');
 
 console.log('开始打包（镜像已指向 npmmirror）...');
+console.log('  输出目录:', outputDir);
 console.log('  参数:', extraArgs.length ? extraArgs.join(' ') : '（默认 Windows 安装程序 + 免安装版）');
 
-const result = spawnSync(bin, ['--win', ...extraArgs], {
+const result = spawnSync(bin, ['--win', `-c.directories.output=${outputRelativeToApp}`, ...extraArgs], {
   cwd: ROOT,
   env,
   stdio: 'inherit',
@@ -51,7 +72,6 @@ if (result.status !== 0) {
  * 留着没意义。配置里已经用 differentialPackage: false 关掉了生成，
  * 这里再扫一遍兜底：万一某个版本的 electron-builder 仍然产出，
  * 也不至于让它留在交付目录里让人困惑。 */
-const outputDir = path.resolve(ROOT, '..', 'release');
 const removed = [];
 if (fs.existsSync(outputDir)) {
   for (const name of fs.readdirSync(outputDir)) {
@@ -62,7 +82,19 @@ if (fs.existsSync(outputDir)) {
   }
 }
 
-console.log('\n打包完成，产物在项目根目录的 release/：');
+/* 收尾：清掉中间产物
+ *
+ * 同时打 portable + nsis 时 electron-builder 会自己删掉 win-unpacked，
+ * 只打其中一种时它就留在原地了（白占约 270 MB）。这里统一兜底删掉，
+ * 交付目录里只应该剩安装包本身。 */
+for (const name of ['win-unpacked', 'builder-debug.yml']) {
+  const target = path.join(outputDir, name);
+  if (!fs.existsSync(target)) continue;
+  fs.rmSync(target, { recursive: true, force: true });
+  removed.push(name);
+}
+
+console.log(`\n打包完成，产物在 ${outputDir}：`);
 for (const name of fs.readdirSync(outputDir)) {
   const full = path.join(outputDir, name);
   const isDir = fs.statSync(full).isDirectory();
