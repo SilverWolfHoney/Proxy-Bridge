@@ -33,6 +33,19 @@ export function HomePage(props: HomePageProps): JSX.Element {
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
 
+  /**
+   * 最近一次自动识别出的协议。
+   *
+   * 识别结果由主进程写进配置，而渲染层的配置缓存不会自动刷新，
+   * 所以这里单独记一份：测试成功后立刻就能在界面上显示识别结果。
+   */
+  const [detected, setDetected] = useState<string | null>(upstream.detectedProtocol ?? null);
+
+  // 配置里的识别结果变了（例如换了服务器被清空）就跟随更新
+  useEffect(() => {
+    setDetected(upstream.detectedProtocol ?? null);
+  }, [upstream.detectedProtocol, upstream.host, upstream.port]);
+
   // 直连例外用文本域承载，避免每敲一个字符就写一次配置
   const [directText, setDirectText] = useState(() => rules.direct.join('\n'));
   useEffect(() => {
@@ -62,6 +75,8 @@ export function HomePage(props: HomePageProps): JSX.Element {
         password,
       });
       setTestResult(result);
+      // 识别成功就立刻在界面上标出来，不必等配置缓存刷新
+      if (result.ok && result.testedProtocol) setDetected(result.testedProtocol);
     } catch (err) {
       setTestError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -133,8 +148,8 @@ export function HomePage(props: HomePageProps): JSX.Element {
           <label className="field">
             <span className="field-label">
               协议
-              {upstream.protocol === 'auto' && upstream.detectedProtocol && (
-                <span className="tag tag--ok">已识别：{protocolLabel(upstream.detectedProtocol)}</span>
+              {upstream.protocol === 'auto' && detected && (
+                <span className="tag tag--ok">已识别：{protocolLabel(detected)}</span>
               )}
             </span>
             <select
@@ -151,7 +166,7 @@ export function HomePage(props: HomePageProps): JSX.Element {
             </select>
             {upstream.protocol === 'auto' && (
               <span className="field-hint">
-                {upstream.detectedProtocol
+                {detected
                   ? '已记住识别结果，之后直接用这个协议'
                   : '点「测试连接」会依次尝试三种协议，把能用的一种记下来'}
               </span>
