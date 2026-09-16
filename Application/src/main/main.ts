@@ -9,7 +9,7 @@
  * 不是需要用户理解的概念，因此它的参数被收进「高级设置」。
  */
 
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, shell } from 'electron';
 import path from 'node:path';
 import { ConfigStore } from './store';
 import { ProxyBridge } from '../core/bridge';
@@ -39,9 +39,15 @@ const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL ?? '';
 const isDev = DEV_SERVER_URL.length > 0;
 
 let mainWindow: BrowserWindow | null = null;
+let tray: Tray | null = null;
 let store: ConfigStore;
 let systemProxy: SystemProxyManager;
 let bridge: ProxyBridge;
+
+/** 用户是否点了「退出」。只有这时关窗口才真的退出，否则只是收进托盘 */
+let quittingRequested = false;
+/** 是否已提示过「已最小化到托盘」，只提示一次，免得每次关窗都弹 */
+let trayHintShown = false;
 
 /** 系统代理当前是否由本应用接管 */
 let systemProxyApplied = false;
@@ -75,6 +81,76 @@ function broadcastGlobalState(): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send(IPC.globalProxyEvent, payload);
   }
+  refreshTray();
+}
+
+/* ------------------------------------------------------------------ */
+/* 托盘：关掉窗口后应用继续在后台跑，全局代理才不会断                    */
+/* ------------------------------------------------------------------ */
+
+/** 托盘图标所在目录：打包后在 resources，开发时在项目根 */
+function resourcePath(file: string): string {
+  if (app.isPackaged) return path.join(process.resourcesPath, 'resources', file);
+  return path.join(app.getAppPath(), 'resources', file);
+}
+
+/** 显示并聚焦主窗口 */
+function showMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+    return;
+  }
+  if (!mainWindow.isVisible()) mainWindow.show();
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+}
+
+/** 按当前状态刷新托盘图标与菜单 */
+function refreshTray(): void {
+  if (!tray || tray.isDestroyed()) return;
+
+  const state = currentGlobalState();
+  const detail = state.enabled ? `已开启（${state.listen ?? '启动中'}）` : '未开启';
+
+  tray.setImage(nativeImage.createFromPath(resourcePath(state.enabled ? 'tray-on.png' : 'tray-off.png')));
+  tray.setToolTip(`Proxy Bridge · 全局代理${detail}`);
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: `全局代理：${detail}`, enabled: false },
+      { type: 'separator' },
+      { label: '显示主界面', click: () => showMainWindow() },
+      {
+        label: state.enabled ? '关闭全局代理' : '开启全局代理',
+        click: () => {
+          void (state.enabled ? disableGlobalProxy() : enableGlobalProxy());
+        },
+      },
+      { type: 'separator' },
+      {
+        label: '退出',
+        click: () => {
+          quittingRequested = true;
+          app.quit();
+        },
+      },
+    ]),
+  );
+}
+
+/** 创建托盘图标 */
+function createTray(): void {
+  if (tray) return;
+
+  const image = nativeImage.createFromPath(resourcePath('tray-off.png'));
+  if (image.isEmpty()) {
+    console.error('[tray] 托盘图标读取失败，托盘将不可用');
+    return;
+  }
+
+  tray = new Tray(image);
+  tray.on('click', () => showMainWindow());
+  tray.on('double-click', () => showMainWindow());
+  refreshTray();
 }
 
 function setPhase(phase: GlobalProxyState['phase']): void {
@@ -243,6 +319,27 @@ function createWindow(): void {
   });
 
   mainWindow.once('ready-to-show', () => mainWindow?.show());
+
+  // 点 X 不退出，收进托盘：全局代理必须继续跑，否则关个窗口就断网了。
+  // 只有从托盘菜单选「退出」才真的结束应用。
+  mainWindow.on('close', (event) => {
+    if (quittingRequested) return;
+    event.preventDefault();
+    mainWindow?.hide();
+
+    if (!trayHintShown && tray) {
+      trayHintShown = true;
+      try {
+        tray.displayBalloon({
+          title: 'Proxy Bridge 仍在后台运行',
+          content: '全局代理保持开启。要重新打开界面，点右下角托盘的图标；要退出，右键它选「退出」。',
+        });
+      } catch {
+        // 部分系统不支持气泡通知，忽略即可，托盘图标本身就是提示
+      }
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -370,6 +467,7 @@ if (!app.requestSingleInstanceLock()) {
     bridge.on('status', () => broadcastGlobalState());
 
     registerIpc();
+    createTray();
     createWindow();
 
     // 上次异常退出可能残留了系统代理设置，先还原掉
@@ -391,12 +489,14 @@ if (!app.requestSingleInstanceLock()) {
     }
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      showMainWindow();
     });
   });
 
+  // 刻意不在这里退出：关掉窗口只是收进托盘，应用要继续在后台跑，
+  // 否则全局代理会跟着一起停掉。真正退出只走托盘菜单的「退出」。
   app.on('window-all-closed', () => {
-    app.quit();
+    // 什么都不做
   });
 
   app.on('before-quit', (event) => {
