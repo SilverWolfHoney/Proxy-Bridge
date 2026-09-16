@@ -13,6 +13,16 @@ Thumbs.db
 .vscode/
 .idea/
 
+# 图标不入库：本地生成，换图后跑 npm run icon 即可
+resources/app.ico
+resources/app.png
+resources/tray-off-32.png
+resources/tray-on-32.png
+
+# 打包配置与图标生成脚本不入库
+electron-builder.yml
+scripts/make-icons.mjs
+
 # 本地配置绝不入库：里面可能有你自己的服务器信息与凭据
 config.json
 *.local.json

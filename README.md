@@ -118,9 +118,9 @@ npm run dist        # 打包成 exe（安装程序 + 免安装版，产物在 re
 
 ### 图标
 
-`Application/ico/` 下是图标原图（一张细节完整的、一张简化版），
-由 `Application/scripts/make-icons.mjs` 生成 exe 与托盘用的图标。
-换图后跑 `npm run icon` 重新生成即可，细节见 [Application/README.md](Application/README.md)。
+`Application/resources/` 下的图标由 `Application/scripts/make-icons.mjs` 从 `Application/ico/` 的
+原图本地生成（`npm run icon`）。图标与打包配置不入库，换图或重新打包前跑一次即可，
+细节见 [Application/README.md](Application/README.md)。
 
 ---
 

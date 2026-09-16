@@ -212,13 +212,14 @@ electron-builder 除了 npm 包，还要另外下载一份 Electron 二进制和
 
 ### 图标
 
-图标不是二进制素材，而是由 `scripts/make-icons.mjs` 从 `ico/` 下的原图生成：
+图标不入库，由本地脚本生成到 `resources/`：
 
-- `ico/emote_*.png`（细节完整的大图）→ `resources/app.ico`（16/32/48/64/128/256）与 `app.png`
-- `ico/tab_*.png`（同一角色的简化版）→ `resources/tray-off-32.png` 与 `tray-on-32.png`
+- `ico/emote_*.png`（细节完整的大图）→ `app.ico`（16/32/48/64/128/256）与 `app.png`
+- `ico/tab_*.png`（同一角色的简化版）→ `tray-off-32.png` 与 `tray-on-32.png`
 
 托盘之所以用另一张简化图：托盘实际只有 16~32 像素，细节太多的图缩下去会糊成色块。
-换了原图后跑一次 `npm run icon` 即可重新生成。
+
+换图后跑一次 `npm run icon` 重新生成即可。
 
 ---
 
