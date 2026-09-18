@@ -51,9 +51,18 @@ function dialUpstream(cfg: UpstreamConfig): Promise<net.Socket> {
     };
 
     let socket: net.Socket;
+    // allowHalfOpen：上游可能发完 FIN 就不再发数据，但我们仍要把剩余响应读回来。
+    // 与 bridge 的客户端侧必须成对开启，只改一侧会导致连接不回收。
     if (cfg.protocol === 'https') {
       socket = tls.connect(
-        { host: cfg.host, port: cfg.port, servername: net.isIP(cfg.host) ? undefined : cfg.host },
+        {
+          host: cfg.host,
+          port: cfg.port,
+          servername: net.isIP(cfg.host) ? undefined : cfg.host,
+          // tls.connect 最终落在 net.Socket 上，运行时支持该选项，
+          // 但 tls.ConnectionOptions 的类型定义没有暴露它，故此处断言
+          allowHalfOpen: true,
+        } as tls.ConnectionOptions,
         () => {
           socket.setTimeout(0);
           socket.off('error', onError);
@@ -61,7 +70,7 @@ function dialUpstream(cfg: UpstreamConfig): Promise<net.Socket> {
         },
       );
     } else {
-      socket = net.connect({ host: cfg.host, port: cfg.port }, () => {
+      socket = net.connect({ host: cfg.host, port: cfg.port, allowHalfOpen: true }, () => {
         socket.setTimeout(0);
         socket.off('error', onError);
         resolve(socket);
@@ -182,7 +191,7 @@ async function connectViaHttp(
     const target = net.isIPv6(host) ? `[${host}]` : host;
     const lines = [
       `CONNECT ${target}:${port} HTTP/1.1`,
-      `Host ${target}:${port}`,
+      `Host: ${target}:${port}`,
       'Proxy-Connection: Keep-Alive',
       'User-Agent: ProxyBridge/0.1',
     ];
@@ -410,7 +419,7 @@ export function connectThroughUpstream(
 /** 直连目标（不走上游代理） */
 export function connectDirect(host: string, port: number, timeoutMs: number): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
-    const socket = net.connect({ host, port }, () => {
+    const socket = net.connect({ host, port, allowHalfOpen: true }, () => {
       socket.setTimeout(0);
       socket.off('error', onError);
       resolve(socket);

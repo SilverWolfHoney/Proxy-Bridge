@@ -18,6 +18,15 @@ export interface MockProxyOptions {
    * 写在同一个 TCP 段里，考验网关会不会丢包或把字节串错位置。
    */
   trailingBytes?: string;
+  /**
+   * 收到 CONNECT 后延迟多久才回应答（毫秒）。
+   *
+   * 用来撑开网关的「建连窗口」：真实上游在境外，RTT 常在 100ms~1s，
+   * 而浏览器发出 CONNECT 后紧接着就发 TLS ClientHello 或 POST body，
+   * 这些字节会落在网关等待上游应答的这段时间里。
+   * 若网关此时没把客户端流暂停住，这些字节会被静默丢弃。
+   */
+  delayReplyMs?: number;
 }
 
 export interface MockProxy {
@@ -74,13 +83,20 @@ function createHttpProxyServer(options: MockProxyOptions, record: MockProxy): ne
 
       const upstream = net.connect({ host, port: portText }, () => {
         const reply = Buffer.from('HTTP/1.1 200 Connection Established\r\n\r\n');
-        // 应答与目标首包一次性写出，模拟同一 TCP 段
-        client.write(
-          options.trailingBytes ? Buffer.concat([reply, Buffer.from(options.trailingBytes)]) : reply,
-        );
-        if (rest.length > 0) upstream.write(rest);
-        client.pipe(upstream);
-        upstream.pipe(client);
+        const respond = () => {
+          client.write(
+            options.trailingBytes ? Buffer.concat([reply, Buffer.from(options.trailingBytes)]) : reply,
+          );
+          if (rest.length > 0) upstream.write(rest);
+          client.pipe(upstream);
+          upstream.pipe(client);
+        };
+        // 延迟应答以撑开建连窗口，用于验证网关会不会丢掉窗口内到达的数据
+        if (options.delayReplyMs && options.delayReplyMs > 0) {
+          setTimeout(respond, options.delayReplyMs);
+        } else {
+          respond();
+        }
       });
 
       upstream.on('error', () => client.destroy());

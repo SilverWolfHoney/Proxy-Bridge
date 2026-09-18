@@ -88,6 +88,14 @@ export class ProxyBridge extends EventEmitter {
   private listenAddress: string | null = null;
 
   private connStates = new Map<number, ConnState>();
+  /**
+   * 所有已被 accept 的客户端连接。
+   *
+   * 与 connStates 的区别：后者只包含「已经解析出目标」的连接，
+   * 而这里从 accept 那一刻就登记，stop() 才能把「连上却不发数据」的
+   * 预连接一并断开 —— 否则 server.close() 的回调永远等不到。
+   */
+  private clientSockets = new Set<net.Socket>();
   private records: ConnRecord[] = [];
   private nextId = 1;
   private totalConnections = 0;
@@ -158,7 +166,18 @@ export class ProxyBridge extends EventEmitter {
     this.emit('status', this.getStatus());
 
     return new Promise<BridgeStatus>((resolve) => {
-      const server = net.createServer((socket) => this.handleClient(socket));
+      /*
+       * allowHalfOpen 必须开启。
+       *
+       * Node 默认在收到 FIN 后立刻 destroy，之后任何写入都会失败。
+       * 而 HTTP/1.0、部分 SDK、curl 等客户端的习惯是「发完请求就 shutdown 写端，
+       * 然后继续等响应」—— 默认行为下响应会被全部丢弃，客户端只收到一个 FIN，
+       * 表现成「请求发出去了，但永远等不到返回」。
+       *
+       * 开启后 FIN 只表示「我不再发送」，反向数据依然可以写回去；
+       * 两端的 pipe 会自动把半关闭传播到另一侧。
+       */
+      const server = net.createServer({ allowHalfOpen: true }, (socket) => this.handleClient(socket));
       this.server = server;
 
       const onStartupError = (err: NodeJS.ErrnoException) => {
@@ -207,6 +226,18 @@ export class ProxyBridge extends EventEmitter {
       return Promise.resolve(this.getStatus());
     }
 
+    /*
+     * 先断开所有客户端连接，否则 server.close() 的回调永远不会触发。
+     *
+     * 关键点：connStates 只记录「已经解析出目标」的连接，而浏览器预连接、
+     * 连上却不发数据的客户端都还没登记。server.close() 会等**所有**连接结束，
+     * 这些未登记的 socket 不销毁的话，stop() 就一直不 resolve，
+     * 应用表现为「点了退出没反应、状态卡在运行中」，直到 30 秒握手超时才恢复。
+     */
+    for (const socket of [...this.clientSockets]) {
+      socket.destroy();
+    }
+
     // 先结算并断开所有活跃连接，否则这些连接既不会进入日志，流量也不会被统计。
     // 流量结算交给 finishConn 统一用 socket 的累计计数完成，避免两处算法不一致。
     for (const conn of [...this.connStates.values()]) {
@@ -218,7 +249,19 @@ export class ProxyBridge extends EventEmitter {
     }
 
     return new Promise<BridgeStatus>((resolve) => {
+      // 兜底：某些平台/版本上 close 回调可能因残留连接迟迟不来，超时也要给出结果
+      const timer = setTimeout(() => {
+        this.server = null;
+        this.state = 'stopped';
+        this.listenAddress = null;
+        this.startedAt = null;
+        this.emit('status', this.getStatus());
+        resolve(this.getStatus());
+      }, 3000);
+      timer.unref?.();
+
       server.close(() => {
+        clearTimeout(timer);
         this.server = null;
         this.state = 'stopped';
         this.listenAddress = null;
@@ -235,6 +278,10 @@ export class ProxyBridge extends EventEmitter {
 
   private handleClient(socket: net.Socket): void {
     socket.setNoDelay(true);
+    this.clientSockets.add(socket);
+    socket.on('close', () => {
+      this.clientSockets.delete(socket);
+    });
     // 握手阶段只给 30 秒；隧道建立后会改为 120 秒空闲超时，避免长连接被误杀
     socket.setTimeout(30_000);
     socket.on('error', () => socket.destroy());
@@ -248,6 +295,24 @@ export class ProxyBridge extends EventEmitter {
     let buffer = Buffer.alloc(0);
     let decided = false;
 
+    /*
+     * 交出控制权前必须 pause()。
+     *
+     * Node 的一个反直觉语义：移除最后一个 'data' 监听器**不会**把流切回 paused，
+     * flowing 仍是 true。此时后续到达的字节会进缓冲区，紧接着被投递给一个
+     * 「已经没有监听器」的流，于是被静默消费掉 —— 数据永久丢失。
+     *
+     * 这里交出控制权之后是异步建连（跨境上游 RTT 常在 100ms~1s），
+     * 而浏览器发出 CONNECT 后紧接着就发 TLS ClientHello，几乎必然落在这个窗口里。
+     * 一旦丢失，表现是 TLS 握手偶发失败、POST 请求 body 消失、连接卡到超时。
+     *
+     * pause() 之后数据安全留在缓冲区，后续的 readExactly / pipe 会自动消费。
+     */
+    const handOff = () => {
+      socket.off('data', onData);
+      socket.pause();
+    };
+
     const onData = (chunk: Buffer) => {
       buffer = Buffer.concat([buffer, chunk]);
 
@@ -256,7 +321,7 @@ export class ProxyBridge extends EventEmitter {
       // 按首字节区分协议：0x05 = SOCKS5，其余按 HTTP 处理
       if (buffer[0] === 0x05) {
         decided = true;
-        socket.off('data', onData);
+        handOff();
         if (buffer.length > 0) socket.unshift(buffer);
         this.handleSocks5(socket);
         return;
@@ -273,7 +338,7 @@ export class ProxyBridge extends EventEmitter {
       }
 
       decided = true;
-      socket.off('data', onData);
+      handOff();
       const headText = buffer.subarray(0, end).toString('latin1');
       const rest = buffer.subarray(end + 4);
       this.handleHttpHead(socket, headText, rest);

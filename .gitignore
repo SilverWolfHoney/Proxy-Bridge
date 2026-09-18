@@ -6,6 +6,7 @@ node_modules/
 dist/
 tests-dist/
 release/
+release-config/
 
 # 日志与临时文件
 *.log

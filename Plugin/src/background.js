@@ -45,8 +45,16 @@ const BADGE = Object.freeze({
 /** 本次唤醒期间的串行队列，避免并发写状态互相覆盖（非持久状态）。 */
 let syncChain = Promise.resolve();
 
-/** 最近一次应用配置时使用的凭据，供认证回调读取（非持久状态）。 */
+/**
+ * 最近一次应用配置时使用的凭据（非持久状态）。
+ *
+ * 只是快路径缓存：Service Worker 随时可能被回收，这个变量会清空，
+ * 所以认证回调不能只依赖它，权威来源是 chrome.storage.local。
+ */
 let activeCredentials = { username: '', password: '' };
+
+/** 本次唤醒内是否已经成功取过一次凭据；决定认证回调走快路径还是回存储读 */
+let credentialsLoaded = false;
 
 /**
  * 把异常翻译成中文提示。
@@ -105,15 +113,20 @@ async function applyProxySettings(config) {
         username: config.authEnabled ? config.username : '',
         password: config.authEnabled ? config.password : '',
       };
+      // 刚同步过配置，本次唤醒内凭据是新鲜的，认证回调可以直接走快路径
+      credentialsLoaded = true;
       return { proxyApplied: true, lastError: '' };
     }
 
     await chrome.proxy.settings.clear({ scope: 'regular' });
     activeCredentials = { username: '', password: '' };
+    credentialsLoaded = true;
     return { proxyApplied: false, lastError: '' };
   } catch (error) {
     console.error('[代理快速切换] 应用代理设置失败：', error);
     activeCredentials = { username: '', password: '' };
+    // 设置失败时不要把缓存标记为「已加载」，让认证回调回存储取真实凭据
+    credentialsLoaded = false;
     return { proxyApplied: false, lastError: describeProxyError(error) };
   }
 }
@@ -395,20 +408,48 @@ async function handleMessage(message) {
  * 处理代理认证请求。
  *
  * 只对「代理服务器发起的认证」提供凭据；网站自身的 401 登录框不受影响。
- * 未配置凭据时返回空对象，浏览器会按自己的策略处理（通常是弹出原生登录框）。
+ * 未配置凭据时返回 undefined，浏览器会按自己的策略处理（通常是弹出原生登录框）。
+ *
+ * ── 为什么必须从存储里取，而不是只用内存缓存 ──
+ *
+ * MV3 的 Service Worker 空闲约 30 秒就会被回收，模块级变量随之清空。
+ * 如果只依赖内存，那么「用户配好代理 → 过一会儿 Service Worker 被回收 →
+ * 浏览器发起请求需要认证」这条最常见的路径上，凭据恰好是空的，
+ * 回调只能返回 undefined，于是浏览器拿不到账号密码，表现为**连不上**。
+ * 内存缓存只作为快路径，权威来源始终是存储。
  *
  * @param {object} details 请求详情
- * @returns {Promise<object>|undefined} 认证凭据；无凭据时不接管
+ * @returns {Promise<object|undefined>} 认证凭据；无凭据时不接管
  */
-function handleAuthRequired(details) {
+async function handleAuthRequired(details) {
   // isProxy 为 true 表示这是代理服务器要求的认证，而不是目标网站的登录
   if (!details || details.isProxy !== true) {
     return undefined;
   }
 
-  const { username, password } = activeCredentials;
+  // 快路径：本次唤醒内已经取过就用缓存，省一次存储读取
+  if (credentialsLoaded) {
+    const cached = activeCredentials;
+    if (!cached.username && !cached.password) return undefined;
+    return { authCredentials: { username: cached.username, password: cached.password } };
+  }
+
+  // 权威路径：Service Worker 可能刚被唤醒，内存里什么都没有，必须回存储取
+  let config;
+  try {
+    config = await readConfig();
+  } catch (error) {
+    console.error('[代理快速切换] 读取凭据失败，无法应答认证：', error);
+    return undefined;
+  }
+
+  const username = config.authEnabled ? config.username : '';
+  const password = config.authEnabled ? config.password : '';
+  activeCredentials = { username, password };
+  credentialsLoaded = true;
+
   if (!username && !password) {
-    // 没配凭据就不接管，交给浏览器处理
+    // 确实没配凭据，交回浏览器处理
     return undefined;
   }
 
