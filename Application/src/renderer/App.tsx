@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { AppConfig, DeepPartial } from '../shared/types';
 import { HomePage } from './components/HomePage';
 import { useConfig } from './hooks/useConfig';
-import type { GlobalProxyState, TestResult, TunnelTestResult } from '../shared/types';
+import type { GeneratedKeyInfo, GlobalProxyState, TestResult, TunnelTestResult } from '../shared/types';
 
 const INITIAL_GLOBAL_STATE: GlobalProxyState = {
   enabled: false,
@@ -88,6 +88,19 @@ export function App(): JSX.Element {
     setResetKey((k) => k + 1);
   }, [api, reload]);
 
+  /**
+   * 生成一对新的 SSH 密钥。
+   *
+   * 生成后把路径写进配置：调用方紧接着就会点「测试隧道」，
+   * 配置不落盘的话测的仍是旧路径。
+   */
+  const handleGenerateKey = useCallback(async (): Promise<GeneratedKeyInfo> => {
+    const key = await api.generateKey({});
+    await api.saveConfig({ tunnel: { keyPath: key.privateKeyPath } });
+    await reload();
+    return key;
+  }, [api, reload]);
+
   const handlePatch = useCallback((next: DeepPartial<AppConfig>) => patch(next), [patch]);
 
   if (!ready || !config) {
@@ -126,6 +139,7 @@ export function App(): JSX.Element {
           testUpstream={handleTest}
           testTunnel={handleTestTunnel}
           onClearConfig={handleClearConfig}
+          onGenerateKey={handleGenerateKey}
         />
       </main>
     </div>

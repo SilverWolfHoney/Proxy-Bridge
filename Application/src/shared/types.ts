@@ -233,6 +233,18 @@ export interface TunnelTestResult {
   detail: string;
 }
 
+/** 新生成的 SSH 密钥信息 */
+export interface GeneratedKeyInfo {
+  /** 私钥文件路径（已写盘，权限 0600） */
+  privateKeyPath: string;
+  /** 公钥文件路径 */
+  publicKeyPath: string;
+  /** 公钥单行内容，需要用户粘贴到服务器的 authorized_keys */
+  publicKey: string;
+  /** 公钥指纹，与 `ssh-keygen -lf` 输出一致 */
+  fingerprint: string;
+}
+
 /** 预加载脚本暴露给渲染层的 API */
 export interface ProxyBridgeApi {
   getConfig(): Promise<SafeConfig>;
@@ -258,6 +270,8 @@ export interface ProxyBridgeApi {
   getTunnelStatus(): Promise<TunnelStatus>;
   /** 试建一次隧道并立即拆掉，用于填写参数后自检 */
   testTunnel(input?: Partial<TunnelConfig>): Promise<TunnelTestResult>;
+  /** 生成一对 ed25519 密钥（OpenSSH 原生格式）；返回公钥供用户部署 */
+  generateKey(input?: { keyPath?: string }): Promise<GeneratedKeyInfo>;
 
   /** 用系统文件管理器打开某个目录 */
   openPath(target: string): Promise<void>;

@@ -18,6 +18,8 @@ export const IPC = {
   /* 内置 SSH 隧道 */
   testTunnel: 'tunnel:test',
   getTunnelStatus: 'tunnel:status',
+  /** 生成一对 ed25519 密钥（OpenSSH 原生格式），供没有现成密钥的用户使用 */
+  generateKey: 'tunnel:generateKey',
 
   openPath: 'shell:openPath',
   appInfo: 'app:info',

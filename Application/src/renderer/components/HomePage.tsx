@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type {
   AppConfig,
+  GeneratedKeyInfo,
   GlobalProxyState,
   SafeConfig,
   TestResult,
@@ -19,6 +20,8 @@ export interface HomePageProps {
   testTunnel: (input?: Record<string, unknown>) => Promise<TunnelTestResult>;
   /** 清空本机保存的全部配置（服务器地址、凭据、规则、隧道） */
   onClearConfig: () => Promise<void>;
+  /** 生成一对新密钥并把路径写入配置，返回公钥供用户部署到服务器 */
+  onGenerateKey: () => Promise<GeneratedKeyInfo>;
 }
 
 const PHASE_TEXT: Record<GlobalProxyState['phase'], string> = {
@@ -66,6 +69,12 @@ export function HomePage(props: HomePageProps): JSX.Element {
   const [confirmClear, setConfirmClear] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [clearDone, setClearDone] = useState(false);
+
+  /** 生成密钥的状态与结果 */
+  const [generatingKey, setGeneratingKey] = useState(false);
+  const [generatedKey, setGeneratedKey] = useState<GeneratedKeyInfo | null>(null);
+  const [keyError, setKeyError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   /**
    * 最近一次自动识别出的协议。
@@ -163,6 +172,33 @@ export function HomePage(props: HomePageProps): JSX.Element {
       setClearing(false);
     }
   }, [props]);
+
+  /** 生成一对新的 SSH 密钥，并把公钥显示出来供用户部署到服务器 */
+  const handleGenerateKey = useCallback(async () => {
+    setGeneratingKey(true);
+    setKeyError(null);
+    setGeneratedKey(null);
+    setCopied(false);
+    try {
+      const key = await props.onGenerateKey();
+      setGeneratedKey(key);
+    } catch (err) {
+      setKeyError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGeneratingKey(false);
+    }
+  }, [props]);
+
+  /** 复制公钥；剪贴板不可用时提示用户手动选中复制 */
+  const copyPublicKey = useCallback(async () => {
+    if (!generatedKey) return;
+    try {
+      await navigator.clipboard.writeText(generatedKey.publicKey);
+      setCopied(true);
+    } catch {
+      setKeyError('复制失败，请手动选中上面的公钥内容复制。');
+    }
+  }, [generatedKey]);
 
   return (
     <div>
@@ -539,6 +575,61 @@ export function HomePage(props: HomePageProps): JSX.Element {
                 {tunnelLabel(globalState.tunnel) && (
                   <div className="field-hint" style={{ marginTop: 8 }}>
                     当前状态：<b>{tunnelLabel(globalState.tunnel)}</b>
+                  </div>
+                )}
+
+                {/* 生成密钥：把安装包给别人用时，对方机器上通常没有现成密钥 */}
+                <div className="btn-row" style={{ marginTop: 10 }}>
+                  <button
+                    className="btn btn-sm"
+                    type="button"
+                    onClick={() => void handleGenerateKey()}
+                    disabled={generatingKey}
+                  >
+                    {generatingKey ? <span className="spinner" /> : '🔑'}
+                    {generatingKey ? '生成中…' : '生成新密钥'}
+                  </button>
+                  <span className="field-hint">
+                    没有现成密钥时点这里，私钥会存到 ~/.ssh/ 并自动填好上面的路径
+                  </span>
+                </div>
+
+                {keyError && (
+                  <div className="alert alert-error" style={{ marginTop: 10, marginBottom: 0 }}>
+                    <span className="alert-icon">⚠</span>
+                    <div>{keyError}</div>
+                  </div>
+                )}
+
+                {generatedKey && (
+                  <div className="alert alert-success" style={{ marginTop: 10, marginBottom: 0 }}>
+                    <span className="alert-icon">✓</span>
+                    <div style={{ width: '100%' }}>
+                      <div>
+                        密钥已生成，路径已填入上方「私钥文件」。指纹：
+                        <span className="code-inline">{generatedKey.fingerprint}</span>
+                      </div>
+                      <div style={{ marginTop: 6, opacity: 0.9 }}>
+                        还差一步：在服务器上把这段<strong>公钥</strong>追加到{' '}
+                        <span className="code-inline">/root/.ssh/authorized_keys</span>。
+                        可以直接执行：
+                      </div>
+                      <div className="code-block" style={{ marginTop: 6 }}>
+                        echo &apos;{generatedKey.publicKey}&apos; &gt;&gt; /root/.ssh/authorized_keys
+                      </div>
+                      <div className="btn-row" style={{ marginTop: 8 }}>
+                        <button
+                          className="btn btn-sm"
+                          type="button"
+                          onClick={() => void copyPublicKey()}
+                        >
+                          {copied ? '✓ 已复制公钥' : '复制公钥'}
+                        </button>
+                        <span className="field-hint">
+                          公开信息，不含私钥；复制后自行粘贴到服务器即可
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 )}
 

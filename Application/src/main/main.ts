@@ -16,6 +16,7 @@ import { ConfigStore } from './store';
 import { ProxyBridge } from '../core/bridge';
 import { testUpstream } from '../core/tester';
 import { TunnelManager, expandHome, isUsableKey } from '../core/tunnel';
+import { generateSshKey, suggestKeyPath } from '../core/keygen';
 import { SystemProxyManager } from './systemProxy';
 import { IPC } from '../shared/ipc';
 import {
@@ -23,6 +24,7 @@ import {
   type AppConfig,
   type BridgeStatus,
   type DeepPartial,
+  type GeneratedKeyInfo,
   type GlobalProxyResult,
   type GlobalProxyState,
   type SafeConfig,
@@ -699,6 +701,18 @@ function registerIpc(): void {
       return testTunnelOnce(resolveTunnelConfig(input));
     },
   );
+
+  /**
+   * 生成一对 SSH 密钥。
+   *
+   * 面向的场景：把安装包发给别人时，对方机器上没有可用的密钥，
+   * 也不该要求他理解 SSH。生成后只需把公钥贴到服务器上即可。
+   * 生成失败（例如同名文件已存在）时把原因原样抛给界面显示。
+   */
+  ipcMain.handle(IPC.generateKey, (_e, input?: { keyPath?: string }): GeneratedKeyInfo => {
+    const target = expandHome(input?.keyPath?.trim() || suggestKeyPath());
+    return generateSshKey({ path: target, comment: 'proxy-bridge' });
+  });
 
   ipcMain.handle(IPC.setGlobalProxy, async (_e, enabled: boolean): Promise<GlobalProxyResult> => {
     return enabled ? enableGlobalProxy() : disableGlobalProxy();

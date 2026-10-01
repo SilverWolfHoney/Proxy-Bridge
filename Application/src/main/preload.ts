@@ -11,6 +11,7 @@ import type {
   AppConfig,
   BridgeStatus,
   DeepPartial,
+  GeneratedKeyInfo,
   GlobalProxyResult,
   GlobalProxyState,
   ProxyBridgeApi,
@@ -47,6 +48,9 @@ const api: ProxyBridgeApi = {
 
   testTunnel: (input) =>
     ipcRenderer.invoke(IPC.testTunnel, input) as Promise<TunnelTestResult>,
+
+  generateKey: (input) =>
+    ipcRenderer.invoke(IPC.generateKey, input) as Promise<GeneratedKeyInfo>,
 
   openPath: (target: string) => ipcRenderer.invoke(IPC.openPath, target) as Promise<void>,
 
