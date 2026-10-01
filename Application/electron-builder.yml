@@ -1,0 +1,61 @@
+# electron-builder 打包配置
+#
+# 产物输出到项目根目录的 release/（即 Proxy/release/），方便直接取用：
+#   Proxy Bridge Setup x.y.z.exe   安装程序（可自选安装目录、创建快捷方式）
+#   Proxy Bridge x.y.z.exe         免安装版，双击直接运行
+#
+# 注意：output 是相对于本配置所在的 Application/ 目录解析的，所以写 ../release。
+#
+# 应用自身的构建产物在 Application/dist/（package.json 的 main 指向那里），
+# 两者不会互相覆盖。
+#
+# 图标由 npm run icon 生成到 Application/resources/，打包前会自动跑一次。
+
+appId: com.proxybridge.app
+productName: Proxy Bridge
+
+directories:
+  output: ../release
+
+# 只把运行需要的东西打进去，源码/测试/脚本不参与
+files:
+  - dist/**/*
+  - package.json
+
+# 图标放在 asar 外面，主进程用 process.resourcesPath 读取
+extraResources:
+  - from: resources
+    to: resources
+
+win:
+  icon: resources/app.ico
+  # 同时产出安装程序与免安装版
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+
+nsis:
+  # 走引导式安装，让用户能自选安装位置
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Proxy Bridge
+  artifactName: ${productName} Setup ${version}.${ext}
+  # 不生成 .blockmap：那是给自动更新做增量下载用的索引，
+  # 本项目不发布更新，留着只会让人以为安装包旁边多了个奇怪的文件
+  differentialPackage: false
+  # 卸载时询问是否删除本机配置与缓存（默认保留）。
+  # 默认行为会在机器上留下 config.json（含服务器地址与加密凭据），
+  # 转手电脑时容易忘记清理，所以把选择权交给卸载的人。
+  include: installer.nsh
+
+portable:
+  artifactName: ${productName} ${version}.${ext}
+
+# 不发布到任何地方，只是本地打包
+publish: null

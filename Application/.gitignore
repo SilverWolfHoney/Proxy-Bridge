@@ -17,8 +17,9 @@ resources/app.ico
 resources/app.png
 resources/tray-32.png
 
-# 打包配置不入库
-electron-builder.yml
+# 打包配置（electron-builder.yml）与卸载脚本（installer.nsh）入库：
+# 二者只描述安装行为（目标平台、快捷方式、卸载时是否删除本机数据），
+# 不含服务器地址、凭据或本机路径，入库后别人克隆即可复现同样的安装包。
 
 # 本地配置绝不入库：里面可能有你自己的服务器信息与凭据
 config.json
