@@ -237,6 +237,8 @@ export interface TunnelTestResult {
 export interface ProxyBridgeApi {
   getConfig(): Promise<SafeConfig>;
   saveConfig(patch: DeepPartial<AppConfig>): Promise<SafeConfig>;
+  /** 清空本机保存的全部配置（服务器地址、凭据、规则、隧道），恢复默认 */
+  clearConfig(): Promise<SafeConfig>;
   getStatus(): Promise<BridgeStatus>;
   testUpstream(input?: {
     protocol?: UpstreamProtocolSetting;

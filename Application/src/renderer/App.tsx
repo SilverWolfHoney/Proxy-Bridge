@@ -14,11 +14,13 @@ const INITIAL_GLOBAL_STATE: GlobalProxyState = {
 
 export function App(): JSX.Element {
   const api = window.proxyBridge;
-  const { config, patch, flush } = useConfig(api);
+  const { config, patch, flush, reload } = useConfig(api);
 
   const [globalState, setGlobalState] = useState<GlobalProxyState>(INITIAL_GLOBAL_STATE);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** 每次清空配置后自增，用作 HomePage 的 key 以重置其内部 state */
+  const [resetKey, setResetKey] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -73,6 +75,19 @@ export function App(): JSX.Element {
     [api, flush],
   );
 
+  /**
+   * 清空本机配置。
+   *
+   * 主进程负责先把全局代理关掉再清数据；这里 reload 拿回权威的空配置，
+   * 再递增 resetKey 让 HomePage 整体重新挂载——界面里散落着若干文本域与
+   * 密码框的本地 state，重新挂载比逐个手动同步更不容易漏。
+   */
+  const handleClearConfig = useCallback(async () => {
+    await api.clearConfig();
+    await reload();
+    setResetKey((k) => k + 1);
+  }, [api, reload]);
+
   const handlePatch = useCallback((next: DeepPartial<AppConfig>) => patch(next), [patch]);
 
   if (!ready || !config) {
@@ -101,6 +116,7 @@ export function App(): JSX.Element {
 
       <main className="content">
         <HomePage
+          key={resetKey}
           config={config}
           globalState={globalState}
           patch={handlePatch}
@@ -109,6 +125,7 @@ export function App(): JSX.Element {
           busy={busy}
           testUpstream={handleTest}
           testTunnel={handleTestTunnel}
+          onClearConfig={handleClearConfig}
         />
       </main>
     </div>

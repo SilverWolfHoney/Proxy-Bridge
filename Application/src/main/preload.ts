@@ -26,6 +26,8 @@ const api: ProxyBridgeApi = {
   saveConfig: (patch: DeepPartial<AppConfig>) =>
     ipcRenderer.invoke(IPC.saveConfig, patch) as Promise<SafeConfig>,
 
+  clearConfig: () => ipcRenderer.invoke(IPC.clearConfig) as Promise<SafeConfig>,
+
   getStatus: () => ipcRenderer.invoke(IPC.getStatus) as Promise<BridgeStatus>,
 
   testUpstream: (input) => ipcRenderer.invoke(IPC.testUpstream, input) as Promise<TestResult>,

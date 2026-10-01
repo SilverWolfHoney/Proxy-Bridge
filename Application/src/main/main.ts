@@ -671,6 +671,24 @@ function registerIpc(): void {
 
   ipcMain.handle(IPC.getStatus, (): BridgeStatus => bridge.getStatus());
 
+  /**
+   * 清空本机保存的全部配置。
+   *
+   * 顺序很重要：**先关掉全局代理，再清配置**。
+   * 反过来的话，网关和隧道仍然按旧参数在跑，而用户已经看到"配置已清空"，
+   * 会出现"显示未配置、实际还在代理"的错觉——凭据也还留在内存里。
+   */
+  ipcMain.handle(IPC.clearConfig, async (): Promise<SafeConfig> => {
+    const running = systemProxyApplied || store.getConfig().globalProxy.enabled;
+    if (running) {
+      await disableGlobalProxy();
+    }
+    const safe = store.clearAll();
+    pushConfigToBridge();
+    broadcastGlobalState();
+    return safe;
+  });
+
   ipcMain.handle(IPC.getGlobalProxyState, (): GlobalProxyState => currentGlobalState());
 
   ipcMain.handle(IPC.getTunnelStatus, (): TunnelStatus => tunnel.getStatus());

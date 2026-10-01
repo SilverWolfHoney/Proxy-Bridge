@@ -5,6 +5,8 @@
 export const IPC = {
   getConfig: 'config:get',
   saveConfig: 'config:save',
+  /** 清空本机保存的全部配置（含加密的凭据），用于卸载前主动抹掉痕迹 */
+  clearConfig: 'config:clear',
   getStatus: 'bridge:status',
   testUpstream: 'upstream:test',
 

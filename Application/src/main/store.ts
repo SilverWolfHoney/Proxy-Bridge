@@ -251,6 +251,24 @@ export class ConfigStore {
   }
 
   /**
+   * 清空本机保存的全部配置，恢复到出厂默认。
+   *
+   * 用途：卸载或转手给别人之前，把服务器地址、账号、密码（DPAPI 密文）、
+   * 直连规则、隧道配置一并抹掉。卸载程序默认保留数据目录，所以这个动作
+   * 是用户能主动清除敏感信息的唯一入口。
+   *
+   * 注意：只重置内存中的配置并覆盖写回默认值，**不删除文件本身**——
+   * 删文件会让下次启动走"配置文件不存在"的分支，行为与现在一致但
+   * 少了一层可预期的语义（默认值该长什么样由 DEFAULT_CONFIG 单点决定）。
+   */
+  clearAll(): SafeConfig {
+    this.config = cloneDefault();
+    this.legacyPlaintext = false;
+    this.writeToDisk();
+    return this.getSafeConfig();
+  }
+
+  /**
    * 老版本把 host / port / username 以明文写在文件里。
    * 一旦读到这种文件，立刻按新格式重写一遍，旧字段随之消失，
    * 不需要用户重新填写任何东西，也不用等下次保存才生效。

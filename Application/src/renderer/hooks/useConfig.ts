@@ -9,6 +9,8 @@ export interface UseConfigResult {
   patch: ConfigUpdater;
   /** 立即把待写入的改动落盘，返回后配置已生效 */
   flush: () => Promise<void>;
+  /** 丢弃待写入内容，从主进程重新读取配置（用于清空配置等外部改动之后） */
+  reload: () => Promise<void>;
 }
 
 /**
@@ -101,5 +103,21 @@ export function useConfig(api: ProxyBridgeApi): UseConfigResult {
     await doSave();
   }, [doSave]);
 
-  return { config, patch, flush };
+  /**
+   * 从主进程重新读取配置。
+   *
+   * 会先丢弃待写入的补丁：那些内容是基于旧配置的编辑，
+   * 配置被清空后再落盘会把刚删掉的东西又写回去。
+   */
+  const reload = useCallback(async () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    pendingRef.current = null;
+    const fresh = await api.getConfig();
+    setBoth(fresh);
+  }, [api, setBoth]);
+
+  return { config, patch, flush, reload };
 }

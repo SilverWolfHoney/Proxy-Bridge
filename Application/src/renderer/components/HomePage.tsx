@@ -17,6 +17,8 @@ export interface HomePageProps {
   busy: boolean;
   testUpstream: (input?: Record<string, unknown>) => Promise<TestResult>;
   testTunnel: (input?: Record<string, unknown>) => Promise<TunnelTestResult>;
+  /** 清空本机保存的全部配置（服务器地址、凭据、规则、隧道） */
+  onClearConfig: () => Promise<void>;
 }
 
 const PHASE_TEXT: Record<GlobalProxyState['phase'], string> = {
@@ -59,6 +61,11 @@ export function HomePage(props: HomePageProps): JSX.Element {
 
   const [testingTunnel, setTestingTunnel] = useState(false);
   const [tunnelTest, setTunnelTest] = useState<TunnelTestResult | null>(null);
+
+  /** 清除配置的二次确认与结果提示 */
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [clearDone, setClearDone] = useState(false);
 
   /**
    * 最近一次自动识别出的协议。
@@ -143,6 +150,19 @@ export function HomePage(props: HomePageProps): JSX.Element {
       setTestingTunnel(false);
     }
   }, [props, tunnel]);
+
+  /** 清空本机保存的全部配置 */
+  const handleClear = useCallback(async () => {
+    setClearing(true);
+    try {
+      await props.onClearConfig();
+      // 清除后组件会被重新挂载，这里的 setState 只是兜底
+      setConfirmClear(false);
+      setClearDone(true);
+    } finally {
+      setClearing(false);
+    }
+  }, [props]);
 
   return (
     <div>
@@ -573,6 +593,74 @@ export function HomePage(props: HomePageProps): JSX.Element {
                 命中的地址直连，不经过代理服务器。适合内网、公司系统；留空表示全部走代理。
               </span>
             </label>
+
+            <div className="divider" />
+
+            {/* 清除本地配置：卸载或转手前抹掉服务器地址与凭据 */}
+            <div className="field">
+              <span className="field-label">清除本地配置</span>
+              {!confirmClear && !clearDone && (
+                <>
+                  <div className="btn-row">
+                    <button
+                      className="btn btn-sm"
+                      type="button"
+                      style={{ borderColor: '#7f1d1d', color: '#fca5a5' }}
+                      onClick={() => {
+                        setClearDone(false);
+                        setConfirmClear(true);
+                      }}
+                    >
+                      🗑 清除本机保存的全部配置
+                    </button>
+                  </div>
+                  <span className="field-hint">
+                    抹掉服务器地址、账号密码、直连规则与隧道配置，恢复出厂状态。
+                    卸载程序不会自动删这些数据，转手或送人前点一下更放心。
+                  </span>
+                </>
+              )}
+
+              {confirmClear && (
+                <div className="alert alert-error" style={{ marginTop: 4, marginBottom: 0 }}>
+                  <span className="alert-icon">⚠</span>
+                  <div>
+                    <div>确定要清除全部本机配置吗？</div>
+                    <div style={{ marginTop: 2, opacity: 0.9 }}>
+                      服务器地址、账号密码、直连规则和隧道配置都会被抹掉，且无法恢复。
+                      若全局代理正在运行，会先自动关闭。
+                    </div>
+                    <div className="btn-row" style={{ marginTop: 10 }}>
+                      <button
+                        className="btn btn-sm"
+                        type="button"
+                        style={{ borderColor: '#7f1d1d', color: '#fca5a5' }}
+                        onClick={() => void handleClear()}
+                        disabled={clearing}
+                      >
+                        {clearing ? <span className="spinner" /> : null}
+                        {clearing ? '清除中…' : '确认清除'}
+                      </button>
+                      <button
+                        className="btn btn-sm"
+                        type="button"
+                        onClick={() => setConfirmClear(false)}
+                        disabled={clearing}
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {clearDone && !confirmClear && (
+                <div className="alert alert-success" style={{ marginTop: 4, marginBottom: 0 }}>
+                  <span className="alert-icon">✓</span>
+                  <div>配置已清空，界面显示的是出厂默认值。</div>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
