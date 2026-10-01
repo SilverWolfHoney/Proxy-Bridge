@@ -13,6 +13,10 @@ export const IPC = {
   setGlobalProxy: 'globalProxy:set',
   globalProxyEvent: 'globalProxy:changed',
 
+  /* 内置 SSH 隧道 */
+  testTunnel: 'tunnel:test',
+  getTunnelStatus: 'tunnel:status',
+
   openPath: 'shell:openPath',
   appInfo: 'app:info',
 } as const;

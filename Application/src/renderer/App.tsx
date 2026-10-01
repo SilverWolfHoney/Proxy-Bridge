@@ -2,13 +2,14 @@ import { useCallback, useEffect, useState } from 'react';
 import type { AppConfig, DeepPartial } from '../shared/types';
 import { HomePage } from './components/HomePage';
 import { useConfig } from './hooks/useConfig';
-import type { GlobalProxyState, TestResult } from '../shared/types';
+import type { GlobalProxyState, TestResult, TunnelTestResult } from '../shared/types';
 
 const INITIAL_GLOBAL_STATE: GlobalProxyState = {
   enabled: false,
   phase: 'off',
   listen: null,
   error: null,
+  tunnel: null,
 };
 
 export function App(): JSX.Element {
@@ -63,6 +64,15 @@ export function App(): JSX.Element {
     [api, flush],
   );
 
+  /** 隧道试连同样先把界面上的参数落盘，否则测的是旧参数 */
+  const handleTestTunnel = useCallback(
+    async (input?: Record<string, unknown>): Promise<TunnelTestResult> => {
+      await flush();
+      return api.testTunnel(input);
+    },
+    [api, flush],
+  );
+
   const handlePatch = useCallback((next: DeepPartial<AppConfig>) => patch(next), [patch]);
 
   if (!ready || !config) {
@@ -98,6 +108,7 @@ export function App(): JSX.Element {
           onToggle={handleToggle}
           busy={busy}
           testUpstream={handleTest}
+          testTunnel={handleTestTunnel}
         />
       </main>
     </div>

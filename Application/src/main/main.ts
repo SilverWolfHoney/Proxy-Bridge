@@ -11,9 +11,11 @@
 
 import { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, shell } from 'electron';
 import path from 'node:path';
+import net from 'node:net';
 import { ConfigStore } from './store';
 import { ProxyBridge } from '../core/bridge';
 import { testUpstream } from '../core/tester';
+import { TunnelManager, expandHome, isUsableKey } from '../core/tunnel';
 import { SystemProxyManager } from './systemProxy';
 import { IPC } from '../shared/ipc';
 import {
@@ -25,6 +27,9 @@ import {
   type GlobalProxyState,
   type SafeConfig,
   type TestResult,
+  type TunnelConfig,
+  type TunnelStatus,
+  type TunnelTestResult,
   type UpstreamConfig,
 } from '../shared/types';
 
@@ -68,6 +73,7 @@ let tray: Tray | null = null;
 let store: ConfigStore;
 let systemProxy: SystemProxyManager;
 let bridge: ProxyBridge;
+let tunnel: TunnelManager;
 
 /** 用户是否点了「退出」。只有这时关窗口才真的退出，否则只是收进托盘 */
 let quittingRequested = false;
@@ -98,6 +104,7 @@ function currentGlobalState(): GlobalProxyState {
     phase: globalPhase,
     listen: status.listen,
     error: globalError,
+    tunnel: tunnel ? tunnel.getStatus() : null,
   };
 }
 
@@ -157,6 +164,8 @@ function cleanupAndExit(reason: string): void {
         await systemProxy.restore();
       }
       await bridge.stop();
+      // 最后拆隧道：顺序反了会让网关在无隧道的状态下继续收流量
+      if (tunnel) await tunnel.stop();
     } catch (err) {
       console.error(`[quit:${reason}] 清理失败：`, err);
     } finally {
@@ -244,6 +253,144 @@ function setPhase(phase: GlobalProxyState['phase']): void {
 }
 
 /* ------------------------------------------------------------------ */
+/* 内置 SSH 隧道                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 解析隧道参数：把「留空表示沿用」的字段补全，得到一份完整可用的配置。
+ *
+ * 约定：
+ *  - `host` 留空时沿用上游服务器地址（代理和 SSH 通常在同一台机器上）
+ *  - `user` 留空时按 root 处理
+ */
+function resolveTunnelConfig(input?: Partial<TunnelConfig>): TunnelConfig {
+  const saved = store.getConfig();
+  const t: TunnelConfig = { ...saved.tunnel, ...(input ?? {}) };
+  const upstreamHost = saved.upstream.host.trim();
+  return {
+    ...t,
+    host: (t.host || upstreamHost).trim(),
+    user: (t.user || 'root').trim(),
+    keyPath: (t.keyPath || '').trim(),
+    port: Number.isInteger(t.port) && t.port > 0 ? t.port : 22,
+    remotePort: Number.isInteger(t.remotePort) && t.remotePort > 0 ? t.remotePort : 9999,
+    localPort: Number.isInteger(t.localPort) && t.localPort >= 0 ? t.localPort : 0,
+  };
+}
+
+/** 隧道配置是否填全了（至少要能确定 SSH 服务器） */
+function isTunnelConfigured(cfg: TunnelConfig): boolean {
+  return cfg.host.length > 0 && cfg.port > 0 && cfg.remotePort > 0;
+}
+
+/** 按当前配置启动隧道 */
+function startTunnel(cfg: TunnelConfig): Promise<TunnelStatus> {
+  return tunnel.start({
+    user: cfg.user,
+    host: cfg.host,
+    port: cfg.port,
+    keyPath: cfg.keyPath,
+    remotePort: cfg.remotePort,
+    localPort: cfg.localPort,
+  });
+}
+
+/** 试建一次隧道并立即拆掉，供界面上的「测试隧道」按钮使用 */
+async function testTunnelOnce(cfg: TunnelConfig): Promise<TunnelTestResult> {
+  if (!isTunnelConfigured(cfg)) {
+    return { ok: false, latencyMs: null, listen: null, detail: '请先填写 SSH 服务器地址与端口' };
+  }
+  if (cfg.keyPath && !isUsableKey(cfg.keyPath)) {
+    return {
+      ok: false,
+      latencyMs: null,
+      listen: null,
+      detail: `找不到私钥文件：${expandHome(cfg.keyPath)}。请重新选择，或改用 ssh-agent 中的密钥。`,
+    };
+  }
+
+  const probe = new TunnelManager();
+  const started = Date.now();
+  try {
+    const status = await probe.start({
+      user: cfg.user,
+      host: cfg.host,
+      port: cfg.port,
+      keyPath: cfg.keyPath,
+      remotePort: cfg.remotePort,
+      localPort: 0,
+      // 试建时不必等满默认超时，尽早给出结论
+      connectTimeoutMs: 15_000,
+    });
+
+    if (status.state !== 'ready' || !status.listen) {
+      return {
+        ok: false,
+        latencyMs: null,
+        listen: null,
+        detail: status.error ?? '隧道建立失败（未给出原因）',
+      };
+    }
+
+    // 隧道通了不代表对端代理可用：再从隧道里发一次 HTTP 探测
+    const proxyReachable = await probeProxyThrough(status.listen);
+    const ms = Date.now() - started;
+    await probe.stop();
+
+    if (!proxyReachable.ok) {
+      return {
+        ok: false,
+        latencyMs: ms,
+        listen: status.listen,
+        detail: `SSH 隧道已建立（${status.listen}），但隧道对端的代理无响应：${proxyReachable.error}`,
+      };
+    }
+    return {
+      ok: true,
+      latencyMs: ms,
+      listen: status.listen,
+      detail: `隧道连通，耗时 ${ms}ms；对端代理可用`,
+    };
+  } catch (err) {
+    await probe.stop();
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, latencyMs: null, listen: null, detail: `隧道测试异常：${message}` };
+  }
+}
+
+/** 从隧道端口发一次最小 HTTP 请求，确认对端代理真的在服务 */
+function probeProxyThrough(listen: string): Promise<{ ok: boolean; error: string }> {
+  return new Promise((resolve) => {
+    const [host, portText] = listen.split(':');
+    const port = Number(portText);
+    const socket = net.connect({ host: host || '127.0.0.1', port });
+    let settled = false;
+    const done = (ok: boolean, error = '') => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve({ ok, error });
+    };
+
+    socket.setTimeout(8_000);
+    socket.once('connect', () => {
+      // 不带凭据的 CONNECT：代理应回 407（说明在服务）而不是直接断连
+      socket.write(
+        'CONNECT www.example.com:443 HTTP/1.1\r\nHost: www.example.com:443\r\n\r\n',
+        () => {
+          socket.once('data', (chunk: Buffer) => {
+            const line = chunk.toString('latin1').split('\r\n')[0] ?? '';
+            done(true, line);
+          });
+        },
+      );
+    });
+    socket.once('timeout', () => done(false, '对端代理响应超时'));
+    socket.once('error', (err) => done(false, err.message));
+  });
+}
+
+/* ------------------------------------------------------------------ */
 /* 开关的两个方向                                                      */
 /* ------------------------------------------------------------------ */
 
@@ -257,6 +404,20 @@ function pushConfigToBridge(): AppConfig {
     rules: config.rules,
   });
   return config;
+}
+
+/**
+ * 得到「本次实际会被使用的上游配置」。
+ *
+ * 隧道就绪时它指向本机隧道端口——连通性校验必须用同一份配置，
+ * 否则会出现「校验通过但实际不通」这种最难排查的情况。
+ */
+function effectiveUpstreamForTest(base: UpstreamConfig): UpstreamConfig {
+  const port = tunnel?.getStatus().listen;
+  if (!port) return base;
+  const localPort = Number(port.split(':')[1]);
+  if (!Number.isInteger(localPort) || localPort <= 0) return base;
+  return { ...base, host: '127.0.0.1', port: localPort };
 }
 
 /**
@@ -279,10 +440,31 @@ async function enableGlobalProxy(options: { skipVerify?: boolean } = {}): Promis
       return { ok: false, state: currentGlobalState(), error: globalError };
     }
 
-    // 1) 先确认服务器真的能用：否则开着全局代理等于让整台电脑断网
+    // 1) 内置隧道：必须最先建立。
+    //    它决定了后面「连通性校验」与「实际转发」连到哪个端口，
+    //    所以不能和网关并行做，否则校验会打到旧路径上得出错误结论。
+    if (config.tunnel.enabled) {
+      const tunnelCfg = resolveTunnelConfig();
+      if (!isTunnelConfigured(tunnelCfg)) {
+        globalError = '已启用内置隧道，但未填写 SSH 服务器地址';
+        setPhase('error');
+        return { ok: false, state: currentGlobalState(), error: globalError };
+      }
+
+      setPhase('starting');
+      const tunnelStatus = await startTunnel(tunnelCfg);
+      if (tunnelStatus.state !== 'ready') {
+        globalError = tunnelStatus.error ?? '内置隧道建立失败';
+        setPhase('error');
+        return { ok: false, state: currentGlobalState(), error: globalError };
+      }
+    }
+
+    // 2) 再确认服务器真的能用：否则开着全局代理等于让整台电脑断网。
+    //    隧道已就绪时，这一步探测的是「隧道对端」的代理，而不是直连服务器。
     if (!options.skipVerify) {
       setPhase('starting');
-      const test = await testUpstream(config.upstream);
+      const test = await testUpstream(effectiveUpstreamForTest(config.upstream));
       if (!test.ok) {
         globalError = test.error ?? '代理服务器无法连接';
         setPhase('error');
@@ -290,7 +472,7 @@ async function enableGlobalProxy(options: { skipVerify?: boolean } = {}): Promis
       }
     }
 
-    // 2) 启动本机网关
+    // 3) 启动本机网关
     setPhase('starting');
     const bridgeStatus = await bridge.start();
     if (bridgeStatus.state !== 'running') {
@@ -299,7 +481,7 @@ async function enableGlobalProxy(options: { skipVerify?: boolean } = {}): Promis
       return { ok: false, state: currentGlobalState(), error: globalError };
     }
 
-    // 3) 接管系统代理
+    // 4) 接管系统代理
     setPhase('applying');
     const applied = await systemProxy.apply(config.bridge.host, config.bridge.port, config.rules.direct);
     if (!applied.ok) {
@@ -339,6 +521,12 @@ async function disableGlobalProxy(): Promise<GlobalProxyResult> {
     systemProxyApplied = false;
 
     await bridge.stop();
+    // 网关停掉之后再拆隧道，避免拆的瞬间还有在途连接被硬断。
+    // 判据用隧道自身的状态：用户可能刚关掉开关但隧道还活着。
+    const tunnelState = tunnel?.getStatus().state;
+    if (tunnelState && tunnelState !== 'stopped') {
+      await tunnel.stop();
+    }
     store.save({ globalProxy: { enabled: false } });
     setPhase('off');
     return { ok: true, state: currentGlobalState(), error: null };
@@ -485,6 +673,15 @@ function registerIpc(): void {
 
   ipcMain.handle(IPC.getGlobalProxyState, (): GlobalProxyState => currentGlobalState());
 
+  ipcMain.handle(IPC.getTunnelStatus, (): TunnelStatus => tunnel.getStatus());
+
+  ipcMain.handle(
+    IPC.testTunnel,
+    async (_e, input?: Partial<TunnelConfig>): Promise<TunnelTestResult> => {
+      return testTunnelOnce(resolveTunnelConfig(input));
+    },
+  );
+
   ipcMain.handle(IPC.setGlobalProxy, async (_e, enabled: boolean): Promise<GlobalProxyResult> => {
     return enabled ? enableGlobalProxy() : disableGlobalProxy();
   });
@@ -547,12 +744,25 @@ if (!app.requestSingleInstanceLock()) {
     systemProxy = new SystemProxyManager(userData);
 
     const config = store.getConfig();
+
+    // 隧道管理器：把「服务器回环上的代理端口」映射到本机，
+    // 供网关在启用隧道时改连本地端口（其余上游参数不变）
+    tunnel = new TunnelManager();
+    tunnel.on('status', () => broadcastGlobalState());
+
     bridge = new ProxyBridge({
       host: config.bridge.host,
       port: config.bridge.port,
       upstream: config.upstream,
       rules: config.rules,
       appVersion: app.getVersion(),
+      // 回调而不是快照：隧道会重连，端口必须每次现取
+      tunnelPort: () => {
+        const status = tunnel.getStatus();
+        if (status.state !== 'ready' || !status.listen) return null;
+        const port = Number(status.listen.split(':')[1]);
+        return Number.isInteger(port) && port > 0 ? port : null;
+      },
     });
 
     // 网关状态变化时同步刷新全局代理状态（界面据此显示运行时长等）

@@ -65,12 +65,39 @@ export interface GlobalProxyConfig {
   alsoHttps: boolean;
 }
 
+/**
+ * 内置 SSH 隧道配置。
+ *
+ * 用途：把「服务器回环地址上的代理端口」通过 SSH 映射到本机回环端口，
+ * 让上游连接走加密隧道，从而绕开明文 `CONNECT` 在跨境链路上被识别重置的问题。
+ *
+ * 之所以加密必须在这一层做：SSH 在**本机**就把流量加密了，
+ * 中途只能看到一条 SSH 流。放在服务器侧做没有意义——出口那一段仍是明文。
+ */
+export interface TunnelConfig {
+  /** 是否启用内置隧道 */
+  enabled: boolean;
+  /** SSH 登录用户名 */
+  user: string;
+  /** SSH 服务器地址；留空则沿用上游服务器地址 */
+  host: string;
+  /** SSH 端口 */
+  port: number;
+  /** 私钥文件路径；支持 `~` 开头。留空则交给 ssh 自行协商（含 ssh-agent） */
+  keyPath: string;
+  /** 服务器上代理服务监听的端口（隧道对端） */
+  remotePort: number;
+  /** 本机监听端口；0 表示自动分配 */
+  localPort: number;
+}
+
 /** 应用完整配置 */
 export interface AppConfig {
   upstream: UpstreamConfig;
   bridge: BridgeConfig;
   rules: RulesConfig;
   globalProxy: GlobalProxyConfig;
+  tunnel: TunnelConfig;
 }
 
 /** 脱敏后的配置：渲染层只能看到这个 */
@@ -125,6 +152,8 @@ export interface BridgeStatus {
   stats: TrafficStats;
   /** 系统代理是否已由本应用接管 */
   systemProxyApplied: boolean;
+  /** 上游连接是否正由内置 SSH 隧道承担 */
+  tunnelActive?: boolean;
 }
 
 /** 全局代理的对外状态：一个开关背后的全部事实 */
@@ -137,6 +166,24 @@ export interface GlobalProxyState {
   listen: string | null;
   /** 出错时的中文说明 */
   error: string | null;
+  /** 内置隧道的状态快照；未启用隧道时为 null */
+  tunnel?: TunnelStatus | null;
+}
+
+/** 隧道运行状态 */
+export type TunnelState = 'stopped' | 'starting' | 'ready' | 'reconnecting' | 'error';
+
+/** 隧道状态快照 */
+export interface TunnelStatus {
+  state: TunnelState;
+  /** 本机监听地址，形如 127.0.0.1:17890；未就绪时为 null */
+  listen: string | null;
+  /** 出错时的中文说明 */
+  error: string | null;
+  /** 已重连次数，可据此提示链路抖动 */
+  reconnects: number;
+  /** 就绪时刻的时间戳 */
+  readyAt: number | null;
 }
 
 /** 开启/关闭全局代理的结果 */
@@ -175,6 +222,17 @@ export interface TestResult {
   attempts?: ProtocolAttempt[];
 }
 
+/** 隧道试建结果 */
+export interface TunnelTestResult {
+  ok: boolean;
+  /** 隧道建立耗时（毫秒） */
+  latencyMs: number | null;
+  /** 建成的本地监听地址，失败时为 null */
+  listen: string | null;
+  /** 失败原因或成功说明 */
+  detail: string;
+}
+
 /** 预加载脚本暴露给渲染层的 API */
 export interface ProxyBridgeApi {
   getConfig(): Promise<SafeConfig>;
@@ -193,6 +251,11 @@ export interface ProxyBridgeApi {
   getGlobalProxyState(): Promise<GlobalProxyState>;
   setGlobalProxy(enabled: boolean): Promise<GlobalProxyResult>;
   onGlobalProxyState(listener: (state: GlobalProxyState) => void): () => void;
+
+  /* 内置 SSH 隧道 */
+  getTunnelStatus(): Promise<TunnelStatus>;
+  /** 试建一次隧道并立即拆掉，用于填写参数后自检 */
+  testTunnel(input?: Partial<TunnelConfig>): Promise<TunnelTestResult>;
 
   /** 用系统文件管理器打开某个目录 */
   openPath(target: string): Promise<void>;
@@ -229,6 +292,16 @@ export const DEFAULT_CONFIG: AppConfig = {
   globalProxy: {
     enabled: false,
     alsoHttps: true,
+  },
+  tunnel: {
+    enabled: false,
+    user: 'root',
+    host: '',
+    port: 22,
+    // 用通用默认值；实际密钥不存在时，隧道管理器会去常见位置自动探测
+    keyPath: '~/.ssh/id_ed25519',
+    remotePort: 9999,
+    localPort: 0,
   },
 };
 

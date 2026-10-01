@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { AppConfig, GlobalProxyState, SafeConfig, TestResult } from '../../shared/types';
+import type {
+  AppConfig,
+  GlobalProxyState,
+  SafeConfig,
+  TestResult,
+  TunnelTestResult,
+} from '../../shared/types';
 import type { ConfigUpdater } from '../hooks/useConfig';
 import { DEFAULT_PORTS, formatLatency, protocolLabel } from '../utils';
 export interface HomePageProps {
@@ -10,6 +16,7 @@ export interface HomePageProps {
   onToggle: (enabled: boolean) => Promise<void>;
   busy: boolean;
   testUpstream: (input?: Record<string, unknown>) => Promise<TestResult>;
+  testTunnel: (input?: Record<string, unknown>) => Promise<TunnelTestResult>;
 }
 
 const PHASE_TEXT: Record<GlobalProxyState['phase'], string> = {
@@ -21,9 +28,26 @@ const PHASE_TEXT: Record<GlobalProxyState['phase'], string> = {
   error: '出错',
 };
 
+/** 隧道状态的中文说明；未启用隧道时返回 null */
+function tunnelLabel(state: GlobalProxyState['tunnel']): string | null {
+  if (!state) return null;
+  switch (state.state) {
+    case 'ready':
+      return `隧道已连通（${state.listen ?? '—'}）`;
+    case 'starting':
+      return '隧道建立中…';
+    case 'reconnecting':
+      return `隧道断开，正在重连${state.reconnects > 1 ? `（第 ${state.reconnects} 次）` : ''}…`;
+    case 'error':
+      return `隧道异常：${state.error ?? '原因未知'}`;
+    default:
+      return '隧道未运行';
+  }
+}
+
 export function HomePage(props: HomePageProps): JSX.Element {
   const { config, globalState, busy } = props;
-  const { upstream, bridge, globalProxy, rules } = config;
+  const { upstream, bridge, globalProxy, rules, tunnel } = config;
 
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -32,6 +56,9 @@ export function HomePage(props: HomePageProps): JSX.Element {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
+
+  const [testingTunnel, setTestingTunnel] = useState(false);
+  const [tunnelTest, setTunnelTest] = useState<TunnelTestResult | null>(null);
 
   /**
    * 最近一次自动识别出的协议。
@@ -92,6 +119,31 @@ export function HomePage(props: HomePageProps): JSX.Element {
     props.patch({ rules: { direct: list } });
   };
 
+  /** 试建一次隧道，把结论显示在按钮下方 */
+  const runTunnelTest = useCallback(async () => {
+    setTestingTunnel(true);
+    setTunnelTest(null);
+    try {
+      const result = await props.testTunnel({
+        user: tunnel.user,
+        host: tunnel.host,
+        port: tunnel.port,
+        keyPath: tunnel.keyPath,
+        remotePort: tunnel.remotePort,
+      });
+      setTunnelTest(result);
+    } catch (err) {
+      setTunnelTest({
+        ok: false,
+        latencyMs: null,
+        listen: null,
+        detail: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setTestingTunnel(false);
+    }
+  }, [props, tunnel]);
+
   return (
     <div>
       {globalState.error && (
@@ -119,7 +171,9 @@ export function HomePage(props: HomePageProps): JSX.Element {
           </span>
           <span className="master__hint">
             {on
-              ? `所有程序经由 ${upstream.host}:${upstream.port} 上网`
+              ? tunnel.enabled
+                ? `经由内置隧道 → ${(tunnel.host || upstream.host) || '未配置'}`
+                : `所有程序经由 ${upstream.host}:${upstream.port} 上网`
               : configured
                 ? '点击开启，整台电脑的流量都会走代理'
                 : '先在下面填写代理服务器'}
@@ -136,6 +190,11 @@ export function HomePage(props: HomePageProps): JSX.Element {
           {globalState.listen && (
             <span className="status-strip__item">
               本机端口 <b>{globalState.listen}</b>
+            </span>
+          )}
+          {tunnelLabel(globalState.tunnel) && (
+            <span className="status-strip__item">
+              隧道 <b>{tunnelLabel(globalState.tunnel)}</b>
             </span>
           )}
         </div>
@@ -357,6 +416,145 @@ export function HomePage(props: HomePageProps): JSX.Element {
                 </label>
               </div>
             </div>
+
+            <div className="divider" />
+
+            <label className="switch switch--inline">
+              <input
+                type="checkbox"
+                checked={tunnel.enabled}
+                onChange={(e) => {
+                  props.patch({ tunnel: { enabled: e.target.checked } });
+                  // 切换时清掉上一次的试连结论，避免显示过期结果
+                  setTunnelTest(null);
+                }}
+              />
+              <span className="switch-track" />
+              <span className="switch-label">使用内置 SSH 隧道（推荐，可显著提升稳定性）</span>
+            </label>
+            <span className="field-hint">
+              明文代理的 CONNECT 请求在跨境链路上会被随机丢弃（实测成功率仅
+              17%~37%）。启用地道后流量在<strong>本机</strong>就被加密，
+              中途看不到代理协议与目标域名，实测可稳定连通。
+            </span>
+
+            {tunnel.enabled && (
+              <div style={{ marginTop: 12 }}>
+                <div className="form-grid">
+                  <label className="field">
+                    <span className="field-label">SSH 用户名</span>
+                    <input
+                      className="input input-mono"
+                      value={tunnel.user}
+                      spellCheck={false}
+                      placeholder="root"
+                      onChange={(e) => props.patch({ tunnel: { user: e.target.value } })}
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span className="field-label">SSH 服务器</span>
+                    <input
+                      className="input input-mono"
+                      value={tunnel.host}
+                      spellCheck={false}
+                      placeholder="留空则沿用上面的代理服务器地址"
+                      onChange={(e) => props.patch({ tunnel: { host: e.target.value } })}
+                    />
+                  </label>
+
+                  <label className="field field--narrow">
+                    <span className="field-label">SSH 端口</span>
+                    <input
+                      className="input input-mono"
+                      type="number"
+                      min={1}
+                      max={65535}
+                      value={tunnel.port}
+                      onChange={(e) => props.patch({ tunnel: { port: Number(e.target.value) } })}
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span className="field-label">私钥文件</span>
+                    <input
+                      className="input input-mono"
+                      value={tunnel.keyPath}
+                      spellCheck={false}
+                      placeholder="~/.ssh/id_ed25519"
+                      onChange={(e) => props.patch({ tunnel: { keyPath: e.target.value } })}
+                    />
+                    <span className="field-hint">
+                      留空则用 ssh-agent 中的密钥。对应公钥需已加入服务器的 authorized_keys。
+                    </span>
+                  </label>
+
+                  <label className="field field--narrow">
+                    <span className="field-label">对端代理端口</span>
+                    <input
+                      className="input input-mono"
+                      type="number"
+                      min={1}
+                      max={65535}
+                      value={tunnel.remotePort}
+                      onChange={(e) => props.patch({ tunnel: { remotePort: Number(e.target.value) } })}
+                    />
+                    <span className="field-hint">服务器上代理监听的端口</span>
+                  </label>
+
+                  <label className="field field--narrow">
+                    <span className="field-label">本机隧道端口</span>
+                    <input
+                      className="input input-mono"
+                      type="number"
+                      min={0}
+                      max={65535}
+                      value={tunnel.localPort}
+                      onChange={(e) => props.patch({ tunnel: { localPort: Number(e.target.value) } })}
+                    />
+                    <span className="field-hint">0 表示自动分配</span>
+                  </label>
+                </div>
+
+                {tunnelLabel(globalState.tunnel) && (
+                  <div className="field-hint" style={{ marginTop: 8 }}>
+                    当前状态：<b>{tunnelLabel(globalState.tunnel)}</b>
+                  </div>
+                )}
+
+                <div className="btn-row" style={{ marginTop: 10 }}>
+                  <button
+                    className="btn btn-sm"
+                    type="button"
+                    onClick={() => void runTunnelTest()}
+                    disabled={testingTunnel}
+                  >
+                    {testingTunnel ? <span className="spinner" /> : '🔐'}
+                    {testingTunnel ? '测试中…' : '测试隧道'}
+                  </button>
+                  <span className="field-hint">
+                    试建一次隧道并验证对端代理是否可用，测完自动拆掉
+                  </span>
+                </div>
+
+                {tunnelTest && (
+                  <div
+                    className={`alert ${tunnelTest.ok ? 'alert-success' : 'alert-error'}`}
+                    style={{ marginTop: 10, marginBottom: 0 }}
+                  >
+                    <span className="alert-icon">{tunnelTest.ok ? '✓' : '⚠'}</span>
+                    <div>
+                      <div>
+                        {tunnelTest.ok
+                          ? `隧道测试通过，耗时 ${formatLatency(tunnelTest.latencyMs)}`
+                          : '隧道测试未通过'}
+                      </div>
+                      <div style={{ marginTop: 2, opacity: 0.9 }}>{tunnelTest.detail}</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="divider" />
 

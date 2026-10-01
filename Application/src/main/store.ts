@@ -16,6 +16,7 @@ import {
   type AppConfig,
   type DeepPartial,
   type SafeConfig,
+  type TunnelConfig,
   type UpstreamConfig,
 } from '../shared/types';
 
@@ -37,8 +38,10 @@ interface StoredUpstream extends Omit<UpstreamConfig, 'password' | 'host' | 'por
   username?: string;
 }
 
-interface StoredConfig extends Omit<AppConfig, 'upstream'> {
+interface StoredConfig extends Omit<AppConfig, 'upstream' | 'tunnel'> {
   upstream: StoredUpstream;
+  /** 隧道配置：SSH 服务器地址加密存放，其余字段可明文 */
+  tunnel: Omit<TunnelConfig, 'host'> & { hostEnc: string | null };
   /** 记录写入时的格式版本，便于以后迁移 */
   schemaVersion: number;
   /** 早期版本用过的字段名，仅用于读取时兼容，不再写入 */
@@ -145,6 +148,7 @@ export class ConfigStore {
       bridge: { ...this.config.bridge },
       rules: { direct: this.config.rules.direct.slice(), proxy: this.config.rules.proxy.slice() },
       globalProxy: { ...this.config.globalProxy },
+      tunnel: { ...this.config.tunnel },
     };
   }
 
@@ -223,6 +227,22 @@ export class ConfigStore {
       const raw = patch.globalProxy as DeepPartial<AppConfig['globalProxy']>;
       if (typeof raw.enabled === 'boolean') next.globalProxy.enabled = raw.enabled;
       if (typeof raw.alsoHttps === 'boolean') next.globalProxy.alsoHttps = raw.alsoHttps;
+    }
+
+    if (isPlainObject(patch.tunnel)) {
+      const raw = patch.tunnel as DeepPartial<AppConfig['tunnel']>;
+      if (typeof raw.enabled === 'boolean') next.tunnel.enabled = raw.enabled;
+      if (typeof raw.user === 'string' && raw.user.trim()) next.tunnel.user = raw.user.trim();
+      // host 允许清空：留空表示沿用上游服务器地址
+      if (typeof raw.host === 'string') next.tunnel.host = raw.host.trim();
+      if (raw.port !== undefined) next.tunnel.port = clampPort(raw.port, next.tunnel.port);
+      if (typeof raw.keyPath === 'string') next.tunnel.keyPath = raw.keyPath.trim();
+      if (raw.remotePort !== undefined) next.tunnel.remotePort = clampPort(raw.remotePort, next.tunnel.remotePort);
+      // 本地端口允许为 0，表示自动分配；clampPort 的下界是 0 时会保留 0
+      if (raw.localPort !== undefined) {
+        const lp = Number(raw.localPort);
+        next.tunnel.localPort = Number.isInteger(lp) && lp >= 0 && lp <= 65535 ? lp : next.tunnel.localPort;
+      }
     }
 
     this.config = next;
@@ -325,6 +345,28 @@ export class ConfigStore {
         if (typeof gp.alsoHttps === 'boolean') base.globalProxy.alsoHttps = gp.alsoHttps;
       }
 
+      // 隧道配置：老配置文件里没有这一段，缺省即用 DEFAULT_CONFIG 的值
+      if (isPlainObject(stored.tunnel)) {
+        const tn = stored.tunnel as Partial<TunnelConfig> & { hostEnc?: string | null };
+        if (typeof tn.enabled === 'boolean') base.tunnel.enabled = tn.enabled;
+        if (typeof tn.user === 'string' && tn.user.trim()) base.tunnel.user = tn.user.trim();
+        // host 与上游地址同级敏感：优先读加密字段，兼容老格式明文
+        const tunnelHostEnc = pickField(tn, 'hostEnc');
+        const tunnelHostPlain = typeof tn.host === 'string' ? tn.host.trim() : '';
+        const tunnelHost = typeof tunnelHostEnc === 'string' ? decryptText(tunnelHostEnc).trim() : '';
+        if (typeof tunnelHostEnc === 'string' || tunnelHostPlain) {
+          base.tunnel.host = tunnelHost || tunnelHostPlain;
+        }
+        if (tn.port !== undefined) base.tunnel.port = clampPort(tn.port, base.tunnel.port);
+        if (typeof tn.keyPath === 'string') base.tunnel.keyPath = tn.keyPath.trim();
+        if (tn.remotePort !== undefined) base.tunnel.remotePort = clampPort(tn.remotePort, base.tunnel.remotePort);
+        if (tn.localPort !== undefined) {
+          const lp = Number(tn.localPort);
+          // 0 是合法值（自动分配），clampPort 会把 0 换成 fallback，所以这里单独判断
+          base.tunnel.localPort = Number.isInteger(lp) && lp >= 0 && lp <= 65535 ? lp : base.tunnel.localPort;
+        }
+      }
+
       return base;
     } catch (err) {
       // 配置文件损坏时不静默丢数据：备份后回退到默认值
@@ -356,6 +398,16 @@ export class ConfigStore {
       bridge: { ...this.config.bridge },
       rules: { direct: this.config.rules.direct.slice(), proxy: this.config.rules.proxy.slice() },
       globalProxy: { ...this.config.globalProxy },
+      // SSH 服务器地址同样加密：看一眼配置就知道你在连哪台机器
+      tunnel: {
+        enabled: this.config.tunnel.enabled,
+        user: this.config.tunnel.user,
+        hostEnc: encryptText(this.config.tunnel.host),
+        port: this.config.tunnel.port,
+        keyPath: this.config.tunnel.keyPath,
+        remotePort: this.config.tunnel.remotePort,
+        localPort: this.config.tunnel.localPort,
+      },
     };
 
     const dir = path.dirname(this.filePath);
@@ -373,5 +425,6 @@ function cloneDefault(): AppConfig {
     bridge: { ...DEFAULT_CONFIG.bridge },
     rules: { direct: DEFAULT_CONFIG.rules.direct.slice(), proxy: DEFAULT_CONFIG.rules.proxy.slice() },
     globalProxy: { ...DEFAULT_CONFIG.globalProxy },
+    tunnel: { ...DEFAULT_CONFIG.tunnel },
   };
 }

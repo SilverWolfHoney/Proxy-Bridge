@@ -16,6 +16,8 @@ import type {
   ProxyBridgeApi,
   SafeConfig,
   TestResult,
+  TunnelStatus,
+  TunnelTestResult,
 } from '../shared/types';
 
 const api: ProxyBridgeApi = {
@@ -38,6 +40,11 @@ const api: ProxyBridgeApi = {
     ipcRenderer.on(IPC.globalProxyEvent, handler);
     return () => ipcRenderer.off(IPC.globalProxyEvent, handler);
   },
+
+  getTunnelStatus: () => ipcRenderer.invoke(IPC.getTunnelStatus) as Promise<TunnelStatus>,
+
+  testTunnel: (input) =>
+    ipcRenderer.invoke(IPC.testTunnel, input) as Promise<TunnelTestResult>,
 
   openPath: (target: string) => ipcRenderer.invoke(IPC.openPath, target) as Promise<void>,
 

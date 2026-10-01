@@ -32,6 +32,14 @@ export interface BridgeOptions {
   rules: RulesConfig;
   /** 应用版本，用于健康检查响应，供浏览器插件识别 */
   appVersion?: string;
+  /**
+   * 内置 SSH 隧道就绪时返回其本地端口，否则返回 null。
+   *
+   * 存在这个回调时，`upstream.host/port` 会被替换成「隧道端口」：
+   * 隧道只把服务器回环上的代理端口映射到本机，因此代理协议、账号密码
+   * 等上游配置完全不变，只有「连到哪」变了。
+   */
+  tunnelPort?: () => number | null;
 }
 
 interface ConnState {
@@ -127,7 +135,23 @@ export class ProxyBridge extends EventEmitter {
         startedAt: this.startedAt,
       },
       systemProxyApplied: false, // 由主进程填充
+      tunnelActive: this.tunnelActive(),
     };
+  }
+
+  /** 内置隧道是否正在承担上游（供状态展示与「测试连接」复用） */
+  private tunnelActive(): boolean {
+    return (this.options.tunnelPort?.() ?? null) !== null;
+  }
+
+  /**
+   * 计算本次实际要连的上游地址。
+   * 隧道就绪时改连本机隧道端口，其余上游参数（协议、认证）原样保留。
+   */
+  private effectiveUpstream(): UpstreamConfig {
+    const port = this.options.tunnelPort?.() ?? null;
+    if (port === null) return this.options.upstream;
+    return { ...this.options.upstream, host: '127.0.0.1', port };
   }
 
   getRecords(): ConnRecord[] {
@@ -433,7 +457,7 @@ export class ProxyBridge extends EventEmitter {
     const decision = decideRoute(conn.host, conn.port, direct, proxy);
     conn.route = decision;
 
-    const upstreamCfg = this.options.upstream;
+    const upstreamCfg = this.effectiveUpstream();
     if (decision === 'proxy') {
       if (!upstreamCfg.host || !upstreamCfg.port) {
         throw new Error('尚未配置代理服务器，无法转发（可在应用中填写服务器地址，或把目标域名加入直连规则）');
@@ -611,7 +635,8 @@ export class ProxyBridge extends EventEmitter {
     lines.push('Proxy-Connection: Keep-Alive');
 
     if (conn.route === 'proxy' && this.options.upstream.authEnabled) {
-      const { username, password } = this.options.upstream;
+      // 认证信息取自用户配置（隧道场景下 host/port 被替换，但凭据不变）
+      const { username, password } = this.effectiveUpstream();
       if (username || password) {
         const token = Buffer.from(`${username}:${password}`, 'utf8').toString('base64');
         lines.push(`Proxy-Authorization: Basic ${token}`);
